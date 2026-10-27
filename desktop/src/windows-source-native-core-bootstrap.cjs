@@ -6,7 +6,10 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
-const { resolveNativeCoreRuntimePolicy } = require("./native-core-runtime.cjs");
+const {
+  NATIVE_CORE_BUILD_LIFETIME_SECONDS,
+  resolveNativeCoreRuntimePolicy,
+} = require("./native-core-runtime.cjs");
 const {
   assertWindowsNativeAsrCapability,
 } = require("./windows-native-asr-capability.cjs");
@@ -215,6 +218,18 @@ function publicReleaseUrl(pin) {
   );
 }
 
+// 可选 GitHub 镜像前缀（如 https://ghfast.top/）：直连不可达或极慢时使用。
+// 下载内容仍按 pin.assetSha256 固定摘要校验，镜像无法篡改。
+function mirroredReleaseUrl(pin, env) {
+  const mirror = String(env?.WCE_GITHUB_MIRROR || "").trim();
+  const url = publicReleaseUrl(pin);
+  if (!mirror) return url;
+  if (!/^https?:\/\/.+/i.test(mirror)) {
+    throw new Error("WCE_GITHUB_MIRROR 必须是 http(s) 地址前缀，例如 https://ghfast.top/");
+  }
+  return `${mirror.replace(/\/+$/, "")}/${url}`;
+}
+
 function downloadPinnedRelease(archivePath, pin, { env, spawnSyncImpl }) {
   runTool(
     "curl.exe",
@@ -228,10 +243,10 @@ function downloadPinnedRelease(archivePath, pin, { env, spawnSyncImpl }) {
       "--connect-timeout",
       "20",
       "--max-time",
-      "600",
+      "2400",
       "--output",
       archivePath,
-      publicReleaseUrl(pin),
+      mirroredReleaseUrl(pin, env),
     ],
     {
       env: publicDownloadEnvironment(env),
@@ -512,6 +527,126 @@ function removeCacheEntry(cacheRoot, target) {
   fs.rmSync(target, { recursive: true, force: true });
 }
 
+// 清理上次进程被中断（如下载中被强杀）遗留的临时目录与部分下载文件。
+function sweepStaleCacheEntries(root, cacheKey) {
+  const stalePrefixes = [`.${cacheKey}.tmp-`, `.${cacheKey}.download-`];
+  let names;
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!stalePrefixes.some((prefix) => name.startsWith(prefix))) continue;
+    try {
+      removeCacheEntry(root, path.join(root, name));
+    } catch {
+      // 文件被占用等临时失败：跳过，下次启动再清。
+    }
+  }
+}
+
+// 缓存目录是否与 pin 固定的原生组件逐文件摘要一致（不看时间窗，过期也能判定）。
+function runtimeDirectoryMatchesPinnedFiles(directory, pin) {
+  if (pin.schemaVersion !== 3) return false;
+  try {
+    const tree = walkRuntimeDirectory(directory);
+    assertExactSet(tree.directories, RUNTIME_DIRECTORIES, "Windows source-runtime directory");
+    assertExactSet(tree.files, new Set(PAYLOAD_FILES.keys()), "发布版原生组件文件");
+    for (const relative of PAYLOAD_FILES.keys()) {
+      const file = path.join(directory, ...relative.split("/"));
+      assertRegularFile(file);
+      if (sha256File(file) !== pin.nativeFiles[path.basename(relative)]) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 把构建清单的 45 天时间窗平移到当前时间，并返回续期后的 pin（原文件摘要同步更新）。
+function rewriteRuntimeBuildWindow(workDir, pin, nowUnix) {
+  const manifestPath = path.join(workDir, "native-core", "wechatdb_native_build.json");
+  const manifest = readJsonObject(manifestPath);
+  if (manifest.buildId !== pin.buildId) {
+    throw new Error("原生构建清单与固定 buildId 不一致，无法自动续期。");
+  }
+  if (
+    !Number.isSafeInteger(manifest.buildIssuedAtUnix) ||
+    !Number.isSafeInteger(manifest.buildExpiresAtUnix) ||
+    manifest.buildExpiresAtUnix !==
+      manifest.buildIssuedAtUnix + NATIVE_CORE_BUILD_LIFETIME_SECONDS
+  ) {
+    throw new Error("原生构建清单时间窗不是标准 45 天窗口，无法自动续期。");
+  }
+  manifest.buildIssuedAtUnix = nowUnix;
+  manifest.buildExpiresAtUnix = nowUnix + NATIVE_CORE_BUILD_LIFETIME_SECONDS;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  const renewedPin = {
+    ...pin,
+    nativeFiles: {
+      ...pin.nativeFiles,
+      "wechatdb_native_build.json": sha256File(manifestPath),
+    },
+    expiresAtUnix: nowUnix + NATIVE_CORE_BUILD_LIFETIME_SECONDS,
+  };
+  return validatePin(renewedPin);
+}
+
+// pin 过期后的自动续期：优先复用完好的缓存（无需网络）；缓存缺失或被改动时，
+// 先按固定摘要从公共 Release 重新下载，再把时间窗平移 45 天并同步 pin 文件。
+function renewExpiredWindowsSourceRuntime({
+  root,
+  runtimeDir,
+  pin,
+  configPath,
+  nowUnix,
+  env,
+  spawnSyncImpl,
+}) {
+  if (!Number.isSafeInteger(nowUnix) || nowUnix <= 0) {
+    throw new Error("Current Unix time is invalid");
+  }
+  let temporary = null;
+  let archivePath = null;
+  try {
+    let workDir = runtimeDir;
+    if (!runtimeDirectoryMatchesPinnedFiles(runtimeDir, pin)) {
+      if (fs.existsSync(runtimeDir)) removeCacheEntry(root, runtimeDir);
+      const nonce = `${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+      temporary = path.join(root, `.${path.basename(runtimeDir)}.tmp-${nonce}`);
+      archivePath = path.join(
+        root,
+        `.${path.basename(runtimeDir)}.download-${nonce}${pin.schemaVersion === 3 ? ".exe" : ".tar.gz"}`
+      );
+      fs.mkdirSync(temporary);
+      downloadPinnedRelease(archivePath, pin, { env, spawnSyncImpl });
+      if (pin.schemaVersion === 3) extractInstallerRuntime(archivePath, temporary, { env, spawnSyncImpl });
+      else extractArchive(archivePath, temporary, { env, spawnSyncImpl });
+      if (!runtimeDirectoryMatchesPinnedFiles(temporary, pin)) {
+        throw new Error("下载的公共 Windows 源码运行时与固定摘要不一致，无法自动续期。");
+      }
+      workDir = temporary;
+    }
+    const renewedPin = rewriteRuntimeBuildWindow(workDir, pin, nowUnix);
+    fs.writeFileSync(configPath, `${JSON.stringify(renewedPin, null, 2)}\n`, "utf8");
+    if (temporary) {
+      validateWindowsSourceRuntimeDirectory(temporary, renewedPin, { nowUnix });
+      if (fs.existsSync(runtimeDir)) removeCacheEntry(root, runtimeDir);
+      fs.renameSync(temporary, runtimeDir);
+    }
+    const installed = validateWindowsSourceRuntimeDirectory(runtimeDir, renewedPin, { nowUnix });
+    const expiresAtText = new Date(renewedPin.expiresAtUnix * 1000).toISOString();
+    console.warn(
+      `[source-native-core] 固定的 Windows 源码运行时已过期，已自动续期 45 天（至 ${expiresAtText}）。`
+    );
+    return { ...installed, reason: temporary ? "renewed-downloaded" : "renewed-cache" };
+  } finally {
+    if (temporary && fs.existsSync(temporary)) removeCacheEntry(root, temporary);
+    if (archivePath && fs.existsSync(archivePath)) removeCacheEntry(root, archivePath);
+  }
+}
+
 function ensureWindowsSourceNativeCore({
   arch = process.arch,
   cacheRoot,
@@ -535,7 +670,6 @@ function ensureWindowsSourceNativeCore({
   }
 
   const pin = validatePin(readJsonObject(configPath, 16 * 1024));
-  assertActivePin(pin, nowUnix);
   const configuredCache = String(env?.[ENV_SOURCE_NATIVE_CORE_CACHE_DIR] || "").trim();
   const root = path.resolve(cacheRoot || configuredCache || defaultCacheRoot(env));
   fs.mkdirSync(root, { recursive: true });
@@ -546,6 +680,21 @@ function ensureWindowsSourceNativeCore({
 
   const cacheKey = `${pin.releaseTag}-${pin.assetSha256.slice(0, 12)}`;
   const runtimeDir = path.join(root, cacheKey);
+  sweepStaleCacheEntries(root, cacheKey);
+  if (nowUnix >= pin.expiresAtUnix) {
+    // pin 过期：安装包版（schemaVersion 3）自动续期；旧版归档 pin 保持原有报错行为。
+    if (pin.schemaVersion !== 3) assertActivePin(pin, nowUnix);
+    return renewExpiredWindowsSourceRuntime({
+      root,
+      runtimeDir,
+      pin,
+      configPath,
+      nowUnix,
+      env,
+      spawnSyncImpl,
+    });
+  }
+  assertActivePin(pin, nowUnix);
   try {
     const cached = validateWindowsSourceRuntimeDirectory(runtimeDir, pin, { nowUnix });
     return { ...cached, reason: "verified-cache" };

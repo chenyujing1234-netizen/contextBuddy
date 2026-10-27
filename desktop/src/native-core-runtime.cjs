@@ -342,6 +342,7 @@ function applyNativeCoreRuntimePolicy(env, options = {}) {
 module.exports = {
   ENV_NATIVE_CORE_ALLOW_DEVELOPMENT_BUILD,
   ENV_NATIVE_CORE_MODE,
+  NATIVE_CORE_BUILD_LIFETIME_SECONDS,
   applyNativeCoreRuntimePolicy,
   hasCompleteNativeCore,
   isDevelopmentNativeCoreManifest,

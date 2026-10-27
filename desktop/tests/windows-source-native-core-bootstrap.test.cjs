@@ -259,11 +259,15 @@ test("tracked Windows source pin selects the exact immutable public Release asse
   assert.equal(
     publicReleaseUrl(trackedPin),
     "https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/download/" +
-      "v2.4.0/WeChatDataAnalysis-2.4.0-Setup.exe"
+      "v2.10.0/WeChatDataAnalysis-2.10.0-Setup.exe"
   );
-  assert.equal(trackedPin.assetSha256, "c924347408a94947588b54bf26352ced396513d3bef9386595c36a8210c1410a");
-  assert.equal(trackedPin.nativeFiles["wechatdb_native_build.json"], "27b41c72953587300cad6922176c7288949e9d636bd22be59da930a589c0fb03");
-  assert.equal(trackedPin.expiresAtUnix, 1792680288);
+  assert.equal(trackedPin.assetSha256, "09a63a082503f7b1c194022ac3635885d7de737e7b422f096e1dfbc5e18a2c7d");
+  assert.equal(trackedPin.buildId, "wcda-39523784335-3-windows-native");
+  assert.equal(trackedPin.nativeFiles["wechatdb_client.dll"], "815b274b3fb540def1bd4bf93967f1c7a2f03d1426177af3fbf4edbf0f008299");
+  assert.equal(trackedPin.nativeFiles["wechatdb_broker.exe"], "13f0db8adffb692da0d340a93def3ccf360e1729f96931d6e327dbbb33681d42");
+  // 构建清单摘要与过期时间会被自动续期逻辑更新，此处仅做结构断言。
+  assert.match(trackedPin.nativeFiles["wechatdb_native_build.json"], /^[0-9a-f]{64}$/);
+  assert.ok(Number.isSafeInteger(trackedPin.expiresAtUnix) && trackedPin.expiresAtUnix > 0);
 });
 
 test("安装包组件缓存逐文件校验，并保持源码只读策略", () => withTempRoot(root => {
@@ -285,6 +289,133 @@ test("安装包组件缓存逐文件校验，并保持源码只读策略", () =>
   pin.nativeFiles["wechatdb_native_build.json"] = sha256(bytes);
   assert.throws(() => validateWindowsSourceRuntimeDirectory(directory, pin, { nowUnix: NOW_UNIX }), /restricted source-public/);
 }));
+
+function installerPin(overrides = {}) {
+  const pin = {
+    schemaVersion: 3,
+    platform: "win32",
+    architecture: "x64",
+    publisherRepository: PIN.publisherRepository,
+    releaseTag: "v2.4.0",
+    assetName: "WeChatDataAnalysis-2.4.0-Setup.exe",
+    assetSha256: sha256(ARCHIVE_CONTENT),
+    buildId: NATIVE_MANIFEST.buildId,
+    expiresAtUnix: EXPIRES_AT_UNIX,
+    nativeFiles: Object.fromEntries(
+      [...PAYLOADS].map(([name, bytes]) => [path.basename(name), sha256(bytes)])
+    ),
+  };
+  return { ...pin, ...overrides };
+}
+
+function installerCacheKey(pin) {
+  return `${pin.releaseTag}-${pin.assetSha256.slice(0, 12)}`;
+}
+
+function writeInstallerRuntime(directory) {
+  fs.mkdirSync(path.join(directory, "native-core"), { recursive: true });
+  for (const [relative, bytes] of PAYLOADS) {
+    fs.writeFileSync(path.join(directory, relative), bytes);
+  }
+}
+
+function installerTools(pin, { mirror = "" } = {}) {
+  let downloads = 0;
+  const expectedUrl = mirror
+    ? `${mirror.replace(/\/+$/, "")}/${publicReleaseUrl(pin)}`
+    : publicReleaseUrl(pin);
+  const spawnSyncImpl = (command, args, options) => {
+    if (command === "curl.exe") {
+      downloads += 1;
+      assert.equal(options.shell, false);
+      assert.equal(args.at(-1), expectedUrl);
+      fs.writeFileSync(args[args.indexOf("--output") + 1], ARCHIVE_CONTENT);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (command.endsWith("7z.exe") && args.includes("$PLUGINSDIR/app-64.7z")) {
+      const output = args.find((arg) => arg.startsWith("-o")).slice(2);
+      fs.writeFileSync(path.join(output, "app-64.7z"), ARCHIVE_CONTENT);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (command.endsWith("7z.exe")) {
+      const output = args.find((arg) => arg.startsWith("-o")).slice(2);
+      fs.mkdirSync(output, { recursive: true });
+      for (const [relative, bytes] of PAYLOADS) {
+        fs.writeFileSync(path.join(output, path.basename(relative)), bytes);
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    throw new Error(`unexpected command: ${command} ${args.join(" ")}`);
+  };
+  return { spawnSyncImpl, get downloads() { return downloads; } };
+}
+
+test("过期安装包 pin 从完好缓存自动续期，无需网络", () =>
+  withTempRoot((root) => {
+    const pin = installerPin({ expiresAtUnix: NOW_UNIX });
+    const configPath = writeConfig(root, pin);
+    writeInstallerRuntime(path.join(root, "cache", installerCacheKey(pin)));
+    const options = {
+      arch: "x64",
+      cacheRoot: path.join(root, "cache"),
+      configPath,
+      env: {},
+      nowUnix: NOW_UNIX,
+      platform: "win32",
+      spawnSyncImpl() {
+        throw new Error("完好缓存续期不得访问外部工具");
+      },
+    };
+    const first = ensureWindowsSourceNativeCore(options);
+    assert.equal(first.reason, "renewed-cache");
+    const renewedPin = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    assert.equal(renewedPin.expiresAtUnix, NOW_UNIX + 45 * 24 * 60 * 60);
+    assert.equal(renewedPin.buildId, pin.buildId);
+    assert.equal(
+      renewedPin.nativeFiles["wechatdb_client.dll"],
+      pin.nativeFiles["wechatdb_client.dll"]
+    );
+    assert.match(renewedPin.nativeFiles["wechatdb_native_build.json"], /^[0-9a-f]{64}$/);
+    assert.notEqual(
+      renewedPin.nativeFiles["wechatdb_native_build.json"],
+      pin.nativeFiles["wechatdb_native_build.json"]
+    );
+    validateWindowsSourceRuntimeDirectory(
+      path.join(root, "cache", installerCacheKey(pin)),
+      renewedPin,
+      { nowUnix: NOW_UNIX }
+    );
+    const second = ensureWindowsSourceNativeCore(options);
+    assert.equal(second.reason, "verified-cache");
+  }));
+
+test("过期安装包 pin 缓存缺失时经镜像下载后自动续期", () =>
+  withTempRoot((root) => {
+    const mirror = "https://mirror.example/";
+    const pin = installerPin({ expiresAtUnix: NOW_UNIX });
+    const configPath = writeConfig(root, pin);
+    const tools = installerTools(pin, { mirror });
+    const options = {
+      arch: "x64",
+      cacheRoot: path.join(root, "cache"),
+      configPath,
+      env: { WCE_GITHUB_MIRROR: mirror },
+      nowUnix: NOW_UNIX,
+      platform: "win32",
+      spawnSyncImpl: tools.spawnSyncImpl,
+    };
+    const first = ensureWindowsSourceNativeCore(options);
+    assert.equal(first.reason, "renewed-downloaded");
+    assert.equal(tools.downloads, 1);
+    assert.equal(fs.readdirSync(path.join(root, "cache")).length, 1);
+    const second = ensureWindowsSourceNativeCore({
+      ...options,
+      spawnSyncImpl() {
+        throw new Error("verified cache must not invoke external tools");
+      },
+    });
+    assert.equal(second.reason, "verified-cache");
+  }));
 
 test("generic source bootstrap wires the verified Windows directory without macOS-only variables", () =>
   withTempRoot((root) => {
