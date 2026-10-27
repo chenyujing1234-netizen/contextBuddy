@@ -516,6 +516,36 @@ def test_apply_writes_people_suffix(tmp_path: Path) -> None:
     assert rep2[0].written == 0 and rep2[0].skipped_existing == 1
 
 
+def test_scan_existing_message_lines(tmp_path: Path) -> None:
+    # 两个之前保存的导出 txt + 一个带人物标注的“确认写入”txt + 一个非 txt 文件
+    (tmp_path / "涉及人员消息_2026-10-20.txt").write_text(
+        "==== 涉及人员：喜乐 ====\n"
+        "[2026-07-23 19:24:07] 余井(wxid_demo): 喜乐今天KET考试考得不错\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "涉及人员消息_2026-10-21.txt").write_text(
+        "==== 涉及人员：老妈 ====\n"
+        "[2026-07-26 10:00:00] 老爸(wxid_lao): 老妈的检查报告出来了\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "微信聊天记录.txt").write_text(
+        "[2026-06-01 08:00:00] 余井(wxid_demo): 更早的一条（涉及人物：老妈）\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "笔记.md").write_text(
+        "[2026-08-01 09:00:00] 余井(wxid_demo): 新消息\n", encoding="utf-8"
+    )
+    lines = core.scan_existing_message_lines(tmp_path)
+    # 各 txt 中的消息行均视为已存在；带人物标注的行其原始行也算已存在
+    assert "[2026-07-23 19:24:07] 余井(wxid_demo): 喜乐今天KET考试考得不错" in lines
+    assert "[2026-07-26 10:00:00] 老爸(wxid_lao): 老妈的检查报告出来了" in lines
+    assert "[2026-06-01 08:00:00] 余井(wxid_demo): 更早的一条" in lines
+    # 非 txt 文件不参与去重
+    assert "[2026-08-01 09:00:00] 余井(wxid_demo): 新消息" not in lines
+    # 目录不存在时安静返回空集合
+    assert core.scan_existing_message_lines(tmp_path / "不存在") == set()
+
+
 def test_summarize_annotated() -> None:
     m1 = _msg("2026-07-23 19:24:07", "考得不错")
     m1.people = ["喜乐"]

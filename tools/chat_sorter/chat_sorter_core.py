@@ -572,6 +572,30 @@ def apply_writes(
     return reports
 
 
+def scan_existing_message_lines(directory: str | os.PathLike) -> set[str]:
+    """扫描目录下的全部 txt 文件，收集出现过的整行（含去掉人物标注后缀的原始行）。
+
+    用于人物消息导出前的去重：导出目录里之前保存的 txt 中已存在的消息，
+    这次不再重复保存。目录不存在或个别文件读取失败（被占用等）时安静跳过。
+    """
+    directory = Path(directory)
+    lines: set[str] = set()
+    if not directory.is_dir():
+        return lines
+    for txt in sorted(directory.glob("*.txt")):
+        try:
+            with txt.open("r", encoding="utf-8", errors="replace") as handle:
+                for ln in handle:
+                    line = ln.rstrip("\r\n")
+                    lines.add(line)
+                    stem = _PEOPLE_SUFFIX_RE.sub("", line)
+                    if stem != line:
+                        lines.add(stem)  # 旧行带人物标注时，原始行也算已存在
+        except OSError:
+            continue
+    return lines
+
+
 def summarize(results: list[ClassifyResult]) -> str:
     """生成一行统计摘要。"""
     total = len(results)

@@ -949,8 +949,9 @@ class ChatSorterApp(tk.Tk):
     def _export_people_messages(self) -> None:
         """把所有标注了“涉及人物”的消息（废弃行除外）合并导出到按日期命名的 txt。
 
-        上次已导出过的消息自动跳过并提示不用再保存；文件名含导出日期，
-        同一天重复导出时向同一文件追加；保存目录记住上次的选择。
+        上次已导出过的消息、以及导出目录已有 txt 中已存在的消息都自动跳过，
+        提示不用再保存；文件名含导出日期，同一天重复导出时向同一文件追加；
+        保存目录记住上次的选择。
         """
         annotated = [
             item for item in self.assignments
@@ -964,6 +965,7 @@ class ChatSorterApp(tk.Tk):
             item for item in annotated
             if core.message_key(item["message"]) not in self._msg_exported
         ]
+        skipped_cache = len(annotated) - len(rows)
         if not rows:
             self.export_status_var.set(
                 f"所有 {len(annotated)} 条有人物标注的消息上次已导出过，不用再保存了。"
@@ -976,6 +978,23 @@ class ChatSorterApp(tk.Tk):
             if not directory:
                 return  # 用户取消
             self._save_export_dir(directory)
+        # 导出目录里之前保存的 txt 中已存在的消息，这次不再重复保存
+        existing_lines = core.scan_existing_message_lines(directory)
+        skipped_in_files = sum(
+            1 for item in rows if item["message"].line in existing_lines
+        )
+        rows = [item for item in rows if item["message"].line not in existing_lines]
+        if not rows:
+            detail = []
+            if skipped_cache:
+                detail.append(f"{skipped_cache} 条上次已导出过")
+            if skipped_in_files:
+                detail.append(f"{skipped_in_files} 条在导出目录已有的 txt 中")
+            self.export_status_var.set(
+                f"所有 {len(annotated)} 条有人物标注的消息均已存在"
+                f"（{'，'.join(detail)}），不用再保存了。"
+            )
+            return
         today = date.today().isoformat()
         path = Path(directory) / f"涉及人员消息_{today}.txt"
         blocks = []
@@ -995,14 +1014,14 @@ class ChatSorterApp(tk.Tk):
             messagebox.showerror("导出失败", str(exc))
             return
         self._save_cache_file()
-        skipped_exported = len(annotated) - len(rows)
         skipped_discard = sum(
             1 for item in self.assignments
             if item["discarded"] and self._msg_people.get(core.message_key(item["message"]))
         )
         self.export_status_var.set(
             f"已导出 {len(rows)} 条人物消息到 {path}"
-            + (f"（{skipped_exported} 条上次已导出过，未重复保存）" if skipped_exported else "")
+            + (f"（{skipped_cache} 条上次已导出过，未重复保存）" if skipped_cache else "")
+            + (f"（{skipped_in_files} 条在导出目录已有的 txt 中已存在，未重复保存）" if skipped_in_files else "")
             + (f"（{skipped_discard} 条废弃行未导出）" if skipped_discard else "")
         )
 
