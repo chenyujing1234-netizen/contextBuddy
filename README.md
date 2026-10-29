@@ -1,337 +1,93 @@
-<p align="center">
-    <img src="frontend/public/logo.png" alt="微信数据库解密工具" width="200" />
-</p>
+# ContextBuddy
 
-<div align="center">
-    <h1>WeChatDataAnalysis - 微信数据库解密与分析工具</h1>
-    <p>微信4.x数据解密并生成年度总结，高仿微信，支持实时更新，导出聊天记录，朋友圈等大量便捷功能</p>
-    <p>官网链接：https://lifearchiveproject.github.io/WeChatDataAnalysis/</p>
-    <img src="https://img.shields.io/github/v/tag/LifeArchiveProject/WeChatDataAnalysis" alt="Version" />
-    <img src="https://img.shields.io/github/stars/LifeArchiveProject/WeChatDataAnalysis" alt="Stars" />
-    <img src="https://gh-down-badges.linkof.link/LifeArchiveProject/WeChatDataAnalysis" alt="Downloads" />
-    <img src="https://img.shields.io/github/forks/LifeArchiveProject/WeChatDataAnalysis" alt="Forks" />
-    <a href="https://qm.qq.com/q/2IB0gvYpYA"><img src="https://img.shields.io/badge/QQ Group-WeChatDataAnalysis-12B7F5?logo=tencentqq&logoColor=white" alt="QQ Group" /></a>
-    <img src="https://img.shields.io/badge/Python-3776AB?logo=Python&logoColor=white" alt="Python" />
-    <img src="https://img.shields.io/badge/Vue.js-4FC08D?logo=Vue.js&logoColor=white" alt="Vue.js" />
-    <img src="https://img.shields.io/badge/SQLite-003B57?logo=SQLite&logoColor=white" alt="SQLite" />
-    <p>如果你需要 QQ 侧的数据解密、分析或年度总结类工具，欢迎体验 <a href="https://github.com/H3CoF6/WeQ">H3CoF6/WeQ</a>；WeQ 作者也是本项目开发成员之一</p>
-</div>
+一个将各类**上下文数据**统一保存到本地的桌面应用。它把散落在浏览器、微信、个人电脑与手机端的上下文（浏览记录、聊天记录、AI 对话、操作记录等）集中收纳到本地文件夹，为后续的跨端同步、上下文管理与分享（WorkBuddy、第三方应用等）提供统一的数据底座。
 
-## 年度总结
+> 当前阶段以**本地保存**为主，产品定位为免费工具，后续再做跨端同步与管理、企业端能力。
 
-<table>
-  <tr>
-    <td align="center" colspan="2"><img src="frontend/public/style1.png" alt="年度总结 Modern" width="800"/></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/AnnualSummary1.gif" alt="AnnualSummary 1" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary2.gif" alt="AnnualSummary 2" width="400"/></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/AnnualSummary3.gif" alt="AnnualSummary 3" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary4.gif" alt="AnnualSummary 4" width="400"/></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/AnnualSummary5.gif" alt="AnnualSummary 5" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary6.png" alt="AnnualSummary 6" width="400"/></td>
-  </tr>
-  <tr>
-    <td><img src="frontend/public/AnnualSummary7.png" alt="AnnualSummary 7" width="400"/></td>
-    <td><img src="frontend/public/AnnualSummary8.png" alt="AnnualSummary 8" width="400"/></td>
-  </tr>
-</table>
+## 上下文数据类别
 
-## 界面预览
+ContextBuddy 面向以下上下文来源进行采集与归档：
 
-<table>
-  <tr>
-    <td align="center" colspan="2"><b>聊天记录页面</b>（支持多种消息类型展示，样式尽可能与微信保持一致）</td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/message.png" alt="聊天记录页面" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>修改消息</b>（本地修改，支持恢复）</td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/edit.gif" alt="修改消息" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>实时消息同步</b>（点击侧边栏闪电图标后，消息会自动刷新）</td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/RealTimeMessages.gif" alt="实时消息同步" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>设置面板</b>（桌面行为、启动偏好、更新、朋友圈缓存策略）</td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/setting.png" alt="设置面板" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>朋友圈</b>（支持查看用户之前朋友圈的背景图及时间；本地查看过的朋友圈即使后续不可见也可以查看）</td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/sns.png" alt="朋友圈" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>聊天记录搜索</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/search.png" alt="聊天记录搜索" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>聊天记录导出</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/export.png" alt="聊天记录导出" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>联系人导出</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/Contact.png" alt="联系人导出" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>微信收藏</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/readme-favorites.png" alt="微信收藏" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>转账与红包</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/readme-payments.png" alt="转账与红包" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>小程序</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/readme-mini-programs.png" alt="小程序" width="800"/></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2"><b>视频号直播</b></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><img src="frontend/public/readme-finder.png" alt="视频号直播" width="800"/></td>
-  </tr>
-</table>
-
-## 高级版
-
-常规版聚焦于**解密、读取、导出与年度总结**等只读能力；**高级版**在此基础上提供 **77 项写入、在线动作与自动化能力**，覆盖消息修改、消息补录、微信动作、朋友圈同步与互动、群聊与联系人管理、搜索、红包明细及自动化任务。消息发送、会话状态、联系人 / 群聊、朋友圈、搜索、红包明细等高级版在线功能通过独立登录使用，不依赖本机微信客户端版本；消息修改与补录直接作用于本地数据，依赖相应的数据格式支持。当前公开版本仅展示功能说明与演示动画，不包含高级功能的执行实现；实际使用需要获取高级版。
-
-> **获取方式**：进 QQ 3 群 [**1109365501**](https://qm.qq.com/q/2IB0gvYpYA) 私聊咨询群主获取。
-
-| 模块 | 高级版功能 |
-| --- | --- |
-| 消息修改 | 修改文字消息、编辑消息源码、修改时间、字段编辑、恢复原消息、修复为我发送、反转微信气泡位置、删除系统消息 |
-| 消息补录 | 文字、图片、文件、语音、视频、表情、转账记录、红包记录、位置、链接卡片、小程序卡片、视频号卡片、引用消息、合并聊天记录、通话记录、系统消息、拍一拍记录 |
-| 微信动作 | 发送文字消息、发送群聊真 @、发送图片、视频、表情、语音（支持 MP3）、文件、链接卡片、位置、联系人名片、引用回复、读取并发送收藏表情、拍一拍、消息接收与历史补拉、个人二维码、会话已读 / 未读、会话免打扰 |
-| 朋友圈 | 连续同步动态及历史页、朋友圈点赞、图片评论、文字评论、发布朋友圈、删除自己发布的朋友圈动态、删除权限范围内的朋友圈评论 |
-| 群聊 | 修改本人群昵称、发布群公告、新建群聊、修改群名称、拉好友进群、邀请成员进群、移除群成员、退出群聊、群成员批量加好友 |
-| 联系人 | 修改好友备注、同意好友请求、添加好友、删除好友、新建标签、读取 / 重命名 / 删除联系人标签、设置标签、手机号 / 微信号找人、联系人变化记录 |
-| 搜索 | 搜索公众号文章、搜索公众号、搜索视频号账号、搜索视频号内容 |
-| 红包 | 群红包领取明细 |
-| 自动化任务 | 定时群发任务、新好友备注 / 标签 / 欢迎消息处理、朋友圈跟圈任务（按关键词筛出新动态，自动点赞、评论并跟发同样内容，命中屏蔽词的不发） |
-
-其中**消息修改与消息补录共 25 项直接作用于本机微信数据**，可随时还原；会话状态及其他在线动作通过独立登录完成。联系人变化记录及依赖本地数据的自动化任务按对应数据环境支持。
-
-## 可导出的内容
-
-| 内容 | 支持格式 | 导出范围 / 说明 |
+| 类别 | 说明 | 状态 |
 | --- | --- | --- |
-| 聊天记录 | HTML / JSON / TXT / Excel（ZIP） | 当前会话、自定义会话、全部会话、群聊或单聊；支持按消息类型和时间筛选 |
-| 朋友圈 | HTML / JSON / TXT / Excel（ZIP） | 指定联系人或全部联系人 |
-| 联系人 | HTML / JSON / TXT / Excel | 支持按联系人分类和关键词筛选，可选择是否包含头像链接 |
-| 收藏 | HTML / JSON / TXT / Excel（ZIP） | 支持按收藏类型和关键词筛选 |
-| 好友验证 | HTML / JSON / TXT / Excel | 支持按发起方向和关键词筛选 |
-| 小程序 | HTML / JSON / TXT / Excel | 支持按关键词筛选 |
-| 视频号直播 | HTML / JSON / TXT / Excel | 支持按直播类型和关键词筛选 |
-| 转账与红包 | HTML / JSON / TXT / Excel | 支持按记录类型和关键词筛选 |
-| 服务号记录 | HTML / JSON / TXT / Excel | 支持按服务号和记录类型导出 |
-| 账号数据归档 | ZIP | 可选择导出数据库、资源文件或两者 |
+| 微信数据（个微） | 自动保存个人微信聊天数据，解密过程对用户透明、无需感知 | 已实现 |
+| 浏览器记录 | 豆包、Qwen 等 AI 平台的对话记录，通过浏览器插件采集 | 已实现 |
+| 电脑操作记录 | 采集本机操作记录 | 规划中 |
+| 手机端手动上传 | 配合 Nextcloud 等手机端 App 手动上传 | 规划中 |
+| 定制浏览器数据 | 通过自动编写的浏览器插件抓取定制浏览器上的数据 | 规划中 |
 
-> Excel 格式生成 `.xlsx` 文件；聊天记录、朋友圈和收藏会将对应格式文件与必要资源一起打包为 ZIP。
+## 主要功能
 
-## 加入群聊
+- **微信数据自动保存**：后台常驻线程周期性解密微信数据库，生成结构化数据（JSON / TXT），支持自定义保存路径与归档类型（结构化数据 / 数据库文件）。
+- **浏览器记录**：一键检测、安装并引导配置「AI 对话导出」浏览器插件；从服务端拉取本机 device 上传的 GPT 对话，支持会话列表展示与 Markdown 下载（单会话 / 多会话 zip）。
+- **聊天记录分类工具**：对导出的微信聊天内容按人物自动分类归档（LLM 判定归属人），支持人工确认、目录推荐与手工微调。
+- **GPT 对话查看 / 分类工具**：拉取服务端 GPT 对话数据并在本机查看、标注、统计。
 
-也欢迎加入下方 QQ 群一起讨论。
+## 技术栈
 
-<p align="center">
-    <a href="https://qm.qq.com/q/2IB0gvYpYA">
-        <img src="frontend/public/QQImage_1770190010691_1103312318341691201.jpg" alt="WeChatDataAnalysis 加群二维码" width="360" />
-    </a>
-</p>
+- **后端**：Python 3.11+ / FastAPI（默认端口 `10392`）
+- **前端**：Vue.js / Nuxt
+- **桌面端**：Electron
+- **打包**：electron-builder（Windows NSIS / macOS DMG、ZIP）
 
 ## 快速开始
 
-### 1. 下载桌面安装包（推荐）
+### 一键启动（推荐）
 
-1. 打开 Release 页面（最新版）：https://github.com/LifeArchiveProject/WeChatDataAnalysis/releases/latest
-2. Windows 下载 `Setup.exe`；macOS 15+ 的 Apple Silicon Mac 下载 `.dmg` 或 `mac.zip`
-3. 安装完成后启动 `WeChatDataAnalysis`
-
->
-> macOS 首次打开若提示来源限制，请在“系统设置 → 隐私与安全性”中确认来自本仓库的应用。图片密钥扫描还可能需要授予终端或应用辅助功能权限。
-
-### 2. 从源码运行（开发者/高级用户）
-
-#### 2.1 克隆项目
-
-```bash
-git clone https://github.com/LifeArchiveProject/WeChatDataAnalysis.git
-cd WeChatDataAnalysis
+```bat
+start_app.bat
 ```
 
-#### 2.2 安装后端依赖
+会依次启动前端（`:3000`）、后端（`:10392`）与 Electron 窗口。
+
+### 从源码运行
 
 ```bash
-# 使用uv (推荐)
+# 1) 安装后端依赖
 uv sync --no-editable
+
+# 2) 安装桌面端依赖
+cd desktop && npm ci && cd ..
+
+# 3) 安装前端依赖
+cd frontend && npm ci && cd ..
+
+# 4) 启动完整桌面开发模式
+cd desktop && npm run dev
 ```
 
-#### 2.3 安装 WCDB 隔离运行时
+访问：
 
-实时聊天读取需要 Electron 隔离进程。全新克隆或 `desktop/package-lock.json` 更新后必须同步桌面端依赖：
+- 前端界面：http://localhost:3000
+- API 服务：http://localhost:10392
+- API 文档：http://localhost:10392/docs
 
-```bash
-cd desktop
-npm ci
-cd ..
-```
+## 配置文件与日志
 
-#### 2.4 安装前端依赖
-
-```bash
-cd frontend
-npm ci
-```
-
-#### 2.5 启动服务
-
-Windows x64 与 Apple Silicon macOS 都应直接启动完整桌面开发模式：
-
-```bash
-cd desktop
-npm run dev
-```
-
-#### 启动后端API服务
-```bash
-# 在项目根目录
-uv run --no-sync main.py
-```
-
-`main.py` 会在任何项目包导入前优先加入当前仓库的 `src`，并在启动日志中打印 `wechat_decrypt_tool` 的代码来源。开发运行时应指向当前仓库的 `src/wechat_decrypt_tool/__init__.py`，而不是 `.venv/Lib/site-packages` 中的旧副本。Windows 中文路径下不要改用 editable 安装；Python 3.11 可能按系统代码页读取 uv 生成的 UTF-8 `.pth`，导致解释器启动失败。
-
-#### 启动前端开发服务器
-```bash
-# 在frontend目录
-cd frontend
-npm run dev
-```
-
-#### 2.6 访问应用
-
-- 前端界面: http://localhost:3000
-- API服务(默认): http://localhost:10392 （可通过环境变量 WECHAT_TOOL_PORT 修改）
-- API文档(默认): http://localhost:10392/docs
-
-## 聊天 AI 总结与关注提醒
-
-在「设置 → AI 服务」配置模型后，点击聊天右上角 AI，可按条数或时间批量总结群聊与好友消息，并设置定时总结、消息阈值和 AI 语义关注提醒。支持图片、常见文档分析及桌面通知。详见 [使用与开发说明](docs/chat-ai.md)。
-
-可在「设置 → AI 服务 → 本地检索」按账号开启可选的语义检索，使用 Hugging Face 固定版本模型，支持 CPU 与 NVIDIA GPU 自动回退。使用方法、下载来源和兼容性实测见 [本地语义检索说明](docs/local-semantic-search.md)。
-
-## 语音模型下载源
-
-在「设置 → 语音转文字 → 模型下载源」可切换官方源（Hugging Face）与国内镜像（[HF-Mirror](https://hf-mirror.com)）。默认使用官方源，选择会自动保存并用于后续从模型列表发起的下载；已开始的下载保持原源。连接超时后可切换来源，再点击模型的下载按钮重试。镜像站在部分网络下会重定向到官方站，应用会遵循这一永久跳转；镜像本身的可用性仍取决于所在网络。
-
-## MCP 服务
-
-设置页中的“AI 接入提示词”会包含 endpoint 和 Bearer token，可直接复制给客户端作为接入指令。
-
-## 打包为 EXE（Windows 桌面端）
-
-本项目提供基于 Electron 的桌面端安装包（NSIS `Setup.exe`）。
-
-```bash
-# 1) 安装桌面端依赖
-cd desktop
-npm ci
-
-# 2) 打包（会自动：nuxt generate -> 拷贝静态资源 -> PyInstaller 打包后端 -> electron-builder 生成安装包）
-npm run dist
-```
-
-输出位置：`desktop/dist/WeChatDataAnalysis Setup <version>.exe`
-
-## 打包为 DMG / ZIP（macOS 桌面端）
-
-本项目提供基于 Electron 的 macOS ARM64 桌面端安装包。
-
-```bash
-# 1) 安装桌面端依赖
-cd desktop
-npm ci
-
-# 2) 打包（会自动：nuxt generate -> 拷贝静态资源 -> PyInstaller 打包后端 -> electron-builder 生成安装包）
-npm run dist:mac
-```
-
-输出位置：`desktop/dist/WeChatDataAnalysis-<version>-mac-arm64.dmg` 和 `desktop/dist/WeChatDataAnalysis-<version>-mac-arm64.zip`
+- 配置目录：`%APPDATA%\ContextBuddy\`（微信数据 manifest 位于 `contexts\wechat\manifest.json`）
+- 日志目录：`%APPDATA%\ContextBuddy\output\logs\`
 
 ## 安全说明
 
-**重要提醒**:
+**重要提醒**：
 
-1. **仅限个人使用**: 此工具仅用于解密您自己的微信数据
-2. **密钥安全**: 请妥善保管您的解密密钥，不要泄露给他人
-3. **数据隐私**: 解密后的数据包含个人隐私信息，请谨慎处理
-4. **合法使用**: 请遵守相关法律法规，不得用于非法目的
+1. **仅限个人使用**：此工具仅用于处理您自己的数据
+2. **密钥安全**：请妥善保管解密密钥，不要泄露给他人
+3. **数据隐私**：处理后的数据包含个人隐私信息，请谨慎处理
+4. **合法使用**：请遵守相关法律法规，不得用于非法目的
 
 ## 免责声明
 
-请在充分理解以下内容，并自愿承担相应责任的前提下使用本项目：
+请在充分理解以下内容并自愿承担相应责任的前提下使用本项目：
 
-1. **项目性质**
+1. 本项目为独立开发的开源工具，与微信、腾讯及其关联主体不存在隶属、授权、合作或认可关系。相关产品名称和商标归其权利人所有。
+2. 本项目仅可用于处理使用者本人合法持有、管理或已取得明确授权访问的数据。使用者应遵守适用的法律法规、软件许可协议、平台规则和隐私保护义务。
+3. 使用过程可能涉及本地数据库、密钥、聊天记录、媒体文件、微信进程和系统接口。开始前请备份重要数据、密钥及配置，并自行负责密钥保管、数据安全和隐私保护。
+4. 客户端版本变化、内存扫描、Hook、第三方组件及其他本地处理流程，可能导致账号提醒、功能失效、处理失败、文件异常或其他不可预期结果。本项目不保证对未来微信版本持续兼容。
+5. 本项目按现状提供，不对功能的准确性、完整性、稳定性或持续可用性作出明示或默示保证。因使用、误用、版本不兼容、操作中断或第三方策略变化产生的损失和后果，由使用者自行承担。
 
-   本项目为独立开发的非官方开源工具，与微信、腾讯及其关联主体不存在隶属、授权、合作或认可关系。相关产品名称和商标归其权利人所有。
-
-2. **合法使用**
-
-   本项目仅可用于处理使用者本人合法持有、管理或已经取得明确授权访问的数据。使用者应遵守适用的法律法规、软件许可协议、平台规则和隐私保护义务。
-
-3. **数据与备份**
-
-   使用过程可能涉及本地数据库、密钥、聊天记录、媒体文件、微信进程和系统接口。开始前请备份重要数据、密钥及配置，并自行负责密钥保管、数据安全和隐私保护。
-
-4. **兼容性与运行风险**
-
-   客户端版本变化、内存扫描、Hook、第三方组件及其他本地处理流程，可能导致账号提醒、功能失效、处理失败、文件异常或其他不可预期结果。本项目不保证对未来微信版本持续兼容。
-
-5. **责任范围**
-
-   本项目按现状提供，不对功能的准确性、完整性、稳定性或持续可用性作出明示或默示保证。在适用法律允许的范围内，因使用、误用、版本不兼容、操作中断或第三方策略变化产生的损失和后果，由使用者自行承担。
-
-使用或继续使用本项目，即表示使用者已经阅读、理解并同意以上内容，并愿意对自己的操作及其结果负责。
+使用或继续使用本项目，即表示使用者已阅读、理解并同意以上内容。
 
 ## 致谢
 
-1. **[H3CoF6](https://github.com/H3CoF6)**
-2. **[echotrace](https://github.com/ycccccccy/echotrace)**
-3. **[WeFlow](https://github.com/hicccc77/WeFlow)**
-4. **[wx_key](https://github.com/ycccccccy/wx_key)**
-5. **[wechat-dump-rs](https://github.com/0xlane/wechat-dump-rs)**
-6. **[oh-my-wechat](https://github.com/chclt/oh-my-wechat)**
-7. **[vue3-wechat-tool](https://github.com/Ele-Cat/vue3-wechat-tool)**
-8. **[wx-dat](https://github.com/waaaaashi/wx-dat)**
-9. **[Ritsu](https://xhslink.com/m/7YJUsd1sgyF)**
-10. **[recarto404](https://github.com/recarto404)**
-11. **[xiaoshengbao](https://github.com/xiaoshengbao)**
-
-## 贡献
-
-欢迎提交Issue和Pull Request来改进这个项目。
+本项目基于 [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) 的工程改造而来，在此感谢原项目及所有贡献者。

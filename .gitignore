@@ -128,3 +128,10 @@ pro-shots/
 # 语音验收包含真实聊天音频、转写、模型权重及本地运行环境。
 /tmp/stt-benchmark-20260921/
 /tmp/stt-integration-20260921/
+
+# 本地工具运行期状态与凭据（含 API Key、个人聊天分类缓存、会话标注）
+/tools/chat_sorter/llm_config.json
+/tools/chat_sorter/classify_cache.json
+/tools/gpt_conversation_sorter/viewer_config.json
+/tools/gpt_conversation_sorter/viewer_categories.json
+/src/output/
