@@ -3,9 +3,19 @@
     <div class="mx-auto w-full max-w-[980px]">
       <header class="flex items-center gap-4">
         <img src="/logo.png" alt="ContextBuddy Logo" class="h-16 w-16 shrink-0 object-contain" />
-        <div>
+        <div class="min-w-0 flex-1">
           <h1 class="text-2xl font-bold text-[#000000e6]">ContextBuddy</h1>
           <p class="mt-1 text-[13px] leading-6 text-[#7F7F7F]">把你的上下文自动保存在本地，需要时随时查看。</p>
+        </div>
+        <div v-if="loggedIn" class="flex shrink-0 items-center gap-3">
+          <span class="text-[13px] font-medium text-[#333]">{{ accountPhone }}</span>
+          <button
+            type="button"
+            class="cursor-pointer text-[12px] text-[#8a8a8a] hover:text-[#07c160]"
+            @click="doLogout"
+          >
+            退出登录
+          </button>
         </div>
       </header>
 
@@ -66,7 +76,15 @@
           </div>
           <div>
             <div class="text-[#8a8a8a]">当前账号</div>
-            <div class="mt-1 truncate font-medium text-[#222]">{{ wechatSummary.account || '—' }}</div>
+            <select
+              class="mt-1 w-full min-w-0 cursor-pointer truncate rounded-[6px] border border-[#e4e4e4] bg-white px-2 py-1 font-medium text-[#222] outline-none transition hover:border-[#07c160] disabled:cursor-not-allowed disabled:opacity-60"
+              :value="displayWechatAccount"
+              :disabled="chatAccounts.loading"
+              @change="switchWechatAccount"
+            >
+              <option v-if="!wechatAccountOptions.length" value="">暂无账号</option>
+              <option v-for="acc in wechatAccountOptions" :key="acc" :value="acc">{{ wechatAccountDisplayName(acc) }}</option>
+            </select>
           </div>
         </div>
 
@@ -165,6 +183,13 @@
           <div class="flex flex-wrap items-center gap-2">
             <span class="shrink-0 text-[#8a8a8a]">浏览器扩展</span>
             <span class="min-w-0 flex-1 truncate font-medium text-[#222]">{{ extensionStatusText }}</span>
+            <select
+              v-model="installBrowser"
+              class="shrink-0 cursor-pointer rounded-[6px] border border-[#e4e4e4] bg-white px-2 py-1 text-[12px] text-[#222]"
+            >
+              <option value="chrome">Chrome / Edge</option>
+              <option value="firefox">Firefox</option>
+            </select>
             <button
               type="button"
               class="shrink-0 cursor-pointer text-[#07c160] hover:underline disabled:cursor-not-allowed disabled:opacity-60"
@@ -421,31 +446,33 @@
       </section>
     </div>
 
-    <!-- 账号检测浮层：覆盖在主界面上运行检测流程，关闭即回到上下文中心。
-         z-[170] 必须低于 GuideDialog 的 z-180，保证面板内的登录/目录提示弹窗盖在浮层之上。 -->
-    <div
-      v-if="detectionOpen"
-      class="fixed inset-0 z-[170] flex items-center justify-center p-3 sm:p-6"
-    >
-      <div
-        class="wechat-detection-overlay-backdrop absolute inset-0 bg-[rgba(14,22,18,0.44)]"
-        @click="detectionOpen = false"
-      ></div>
-      <div
-        class="wechat-detection-overlay-card relative max-h-[88vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-[#DDEBE0] bg-[#F6FCF8] shadow-[0_24px_80px_-24px_rgba(0,0,0,0.45)]"
-      >
-        <WechatDetectionPanel @close="detectionOpen = false" />
-      </div>
-    </div>
-
     <GlobalExportDialog :open="exportDialogOpen" @close="closeExportDialog" />
+
+    <LoginDialog :open="loginOpen" @success="onLoginSuccess" @close="onLoginClose" />
+
+    <!-- 未登录且登录框被关闭时的门控层：挡住所有按钮，点击任意位置重新弹出登录框 -->
+    <div
+      v-if="!loggedIn && !loginOpen"
+      class="fixed inset-0 z-[199] flex items-center justify-center bg-[rgba(14,22,18,0.18)]"
+      @click="openLogin"
+    >
+      <button
+        type="button"
+        class="rounded-full bg-[#07c160] px-5 py-2 text-[14px] font-medium text-white shadow-lg transition hover:bg-[#06ad56]"
+        @click.stop="openLogin"
+      >
+        请先登录
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useChatAccountsStore } from '~/stores/chatAccounts'
 
-const { getContextSources, getContextSettings, updateContextSettings, triggerWechatSync, getBrowserHistoryStatus, prepareBrowserExtension, openBrowserExtensionPage, openGptPlatform, getBrowserConversations, getBrowserConversation, downloadBrowserExport, getBrowserRemoteConfig, saveBrowserRemoteConfig, listBrowserRemoteDevices, pullBrowserRemoteConversations } = useApi()
+const { getContextSources, getContextSettings, updateContextSettings, triggerWechatSync, getAuthStatus, logoutAccount, getBrowserHistoryStatus, prepareBrowserExtension, openBrowserExtensionPage, openGptPlatform, getBrowserConversations, getBrowserConversation, downloadBrowserExport, getBrowserRemoteConfig, saveBrowserRemoteConfig, listBrowserRemoteDevices, pullBrowserRemoteConversations } = useApi()
 
 const sources = ref([])
 const wechatEnabled = ref(true)
@@ -457,15 +484,83 @@ const syncMessage = ref('')
 const syncMessageOk = ref(true)
 const exportDialogOpen = ref(false)
 
+// ---------- 手机号登录门控：未登录时所有按钮不可用，弹登录框 ----------
+const loggedIn = ref(false)
+const accountPhone = ref('')
+// 默认打开：首屏即用登录框遮罩，避免未登录状态下短暂露出可点击内容
+const loginOpen = ref(true)
+
+const checkLogin = async () => {
+  try {
+    const resp = await getAuthStatus()
+    loggedIn.value = !!resp?.logged_in
+    accountPhone.value = resp?.phone || ''
+  } catch {
+    loggedIn.value = false
+    accountPhone.value = ''
+  }
+  loginOpen.value = !loggedIn.value
+}
+
+const onLoginSuccess = async (phone) => {
+  loggedIn.value = true
+  accountPhone.value = phone
+  loginOpen.value = false
+  await reload()
+}
+
+const doLogout = async () => {
+  try { await logoutAccount() } catch { /* 本地退出失败不影响前端状态 */ }
+  loggedIn.value = false
+  accountPhone.value = ''
+  loginOpen.value = true
+}
+
+const openLogin = () => { loginOpen.value = true }
+const onLoginClose = () => {
+  // 未登录时关闭登录框：保留门控层，点击任意按钮/门控仍会重新弹出登录框
+  loginOpen.value = false
+}
+
 const wechatSource = computed(() => sources.value.find(s => s.source_id === 'wechat') || null)
 const browserSource = computed(() => sources.value.find(s => s.source_id === 'browser_history') || null)
 const plannedSources = computed(() => sources.value.filter(s => !['wechat', 'browser_history'].includes(s.source_id)))
 const wechatSummary = computed(() => wechatSource.value?.summary || {})
 
+// ---------- 微信账号切换：复用聊天账号 Store（与「查看微信上下文」同源） ----------
+const chatAccounts = useChatAccountsStore()
+const { selectedAccount, accounts, switchableAccounts } = storeToRefs(chatAccounts)
+const wechatAccountOptions = computed(() => {
+  const list = []
+  const seen = new Set()
+  for (const raw of [...(accounts.value || []), ...(switchableAccounts.value || [])]) {
+    const name = String(raw?.account || raw || '').trim()
+    if (name && !seen.has(name)) {
+      seen.add(name)
+      list.push(name)
+    }
+  }
+  const fallback = String(wechatSummary.value.account || '').trim()
+  if (fallback && !seen.has(fallback)) list.unshift(fallback)
+  return list
+})
+const displayWechatAccount = computed(() => String(selectedAccount.value || wechatSummary.value.account || '').trim())
+const wechatAccountDisplayName = (account) => {
+  const info = chatAccounts.accountInfoByName?.[account]
+  return String(info?.nickname || info?.selfDisplayName || info?.displayName || '').trim() || account
+}
+const switchWechatAccount = (event) => {
+  const account = String(event?.target?.value || '').trim()
+  if (!account) return
+  chatAccounts.setSelectedAccount(account)
+  event.target.value = account
+}
+
 // ---------- 浏览器记录（GPT 平台对话抓取扩展） ----------
 const activeCard = ref('wechat')
 const checkingExtension = ref(false)
 const installingExtension = ref(false)
+const installBrowser = ref('chrome')
 const togglingBrowser = ref(false)
 const browserHistoryEnabled = ref(true)
 const extensionInstall = ref(null) // {installed, installations[], extension_dir}
@@ -699,25 +794,51 @@ const checkExtension = async (showResult = true) => {
   }
 }
 
+// 各浏览器的扩展加载入口与分步说明
+const EXTENSION_INSTALL_STEPS = {
+  chrome: {
+    label: 'Chrome / Edge',
+    page: 'chrome://extensions/',
+    steps: [
+      '1. 在扩展管理页右上角打开「开发者模式」；',
+      '2. 点「加载已解压的扩展程序」，选择下面这个目录；',
+      '3. 安装完成后回到这里点「检查是否已安装」确认。'
+    ]
+  },
+  firefox: {
+    label: 'Firefox',
+    page: 'about:debugging#/runtime/this-firefox',
+    steps: [
+      '1. 在该页面点「临时载入附加组件…」；',
+      '2. 在弹出的选择框中进入下面这个目录的 firefox 子目录，选择其中的 manifest.json；',
+      '3. 安装完成后回到这里点「检查是否已安装」确认。'
+    ]
+  }
+}
+
+const buildInstallSteps = (browser, opened, alreadyRunning) => {
+  const cfg = EXTENSION_INSTALL_STEPS[browser] || EXTENSION_INSTALL_STEPS.chrome
+  const head = !opened
+    ? `插件副本已生成。未能自动打开浏览器，请先手动打开 ${cfg.label}，在地址栏输入 ${cfg.page} 进入扩展管理页，再按以下步骤完成安装：`
+    : alreadyRunning
+      ? `插件副本已生成（上传地址已指向本机）。检测到 ${cfg.label} 已在运行，未重复启动，请在已打开的 ${cfg.label} 中进入扩展管理页（地址栏输入 ${cfg.page}），按以下步骤完成安装：`
+      : `插件副本已生成（上传地址已指向本机），已打开 ${cfg.label} 扩展管理页，请按以下步骤完成安装：`
+  return [head, ...cfg.steps].join('\n')
+}
+
 const installExtension = async () => {
   installingExtension.value = true
   copyMessage.value = ''
   try {
+    const browser = installBrowser.value
     const resp = await prepareBrowserExtension()
-    extensionDir.value = resp?.extension_dir || ''
-    const pageResp = await openBrowserExtensionPage('chrome')
+    extensionDir.value = browser === 'firefox'
+      ? (resp?.firefox_extension_dir || resp?.extension_dir || '')
+      : (resp?.extension_dir || '')
+    const pageResp = await openBrowserExtensionPage(browser)
     const opened = pageResp?.ok !== false
     const alreadyRunning = pageResp?.already_running === true
-    installMessage.value = [
-      !opened
-        ? '插件副本已生成。未能自动打开浏览器，请先手动打开 Chrome，在地址栏输入 chrome://extensions/ 进入扩展管理页，再按以下步骤完成安装：'
-        : alreadyRunning
-          ? '插件副本已生成（上传地址已指向本机）。检测到 Chrome 已在运行，未重复启动，请在已打开的 Chrome 中进入扩展管理页（地址栏输入 chrome://extensions/），按以下步骤完成安装：'
-          : '插件副本已生成（上传地址已指向本机），已打开浏览器扩展管理页，请按以下步骤完成安装：',
-      '1. 在扩展管理页右上角打开「开发者模式」；',
-      '2. 点「加载已解压的扩展程序」，选择下面这个目录；',
-      '3. 安装完成后回到这里点「检查是否已安装」确认。'
-    ].join('\n')
+    installMessage.value = buildInstallSteps(browser, opened, alreadyRunning)
   } catch (e) {
     installMessage.value = e?.message || '生成扩展副本失败'
   } finally {
@@ -913,9 +1034,12 @@ const changeArchiveContent = async (event) => {
   }
 }
 
-// 账号检测在首页浮层中运行，主界面保持挂载不跳转
-const detectionOpen = ref(false)
-const goDetection = () => { detectionOpen.value = true }
+// 账号检测在独立窗口中打开，主界面保留不跳转
+const goDetection = () => {
+  if (process.client && typeof window !== 'undefined') {
+    window.open('/detection', '_blank')
+  }
+}
 
 const openExportDialog = () => { exportDialogOpen.value = true }
 const closeExportDialog = () => { exportDialogOpen.value = false }
@@ -924,19 +1048,11 @@ const closeExportDialog = () => { exportDialogOpen.value = false }
 let reloadTimer = null
 onMounted(() => {
   void reload()
+  void checkLogin()
+  void chatAccounts.ensureLoaded()
   reloadTimer = setInterval(() => { void reload() }, 60_000)
 })
 onUnmounted(() => { if (reloadTimer) clearInterval(reloadTimer) })
 </script>
 
-<style scoped>
-/* 检测浮层卡片暗色主题（背景/描边变量与 GuideDialog 面板一致） */
-html[data-theme='dark'] .wechat-detection-overlay-backdrop {
-  background: rgba(0, 0, 0, 0.58);
-}
 
-html[data-theme='dark'] .wechat-detection-overlay-card {
-  border-color: var(--setup-border);
-  background: var(--app-surface-bg);
-}
-</style>

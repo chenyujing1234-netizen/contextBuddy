@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "AI对话导出 word/json/md",
-    "version": "2026.10.21",
+    "version": "2026.10.23.2",
     "description": "支持DeepSeek、纳米AI、腾讯元宝、Kimi、通义千问（qianwen.com）、讯飞星火、豆包的对话导出（JSON/Markdown/Word），独立扩展版，无需篡改猴。可在面板中设置自动保存的目录与格式，支持一键上传会话到数据库。",
     "action": {
         "default_popup": "popup.html",
@@ -31,7 +31,9 @@
                 "*://*.xfyun.cn/*",
                 "*://*.doubao.com/*"
             ],
-            "js": ["bridge.js"],
+            "js": [
+                "bridge.js"
+            ],
             "run_at": "document_start"
         },
         {
@@ -46,7 +48,9 @@
                 "*://*.xfyun.cn/*",
                 "*://*.doubao.com/*"
             ],
-            "js": ["content.js"],
+            "js": [
+                "content.js"
+            ],
             "run_at": "document_start",
             "world": "MAIN"
         }

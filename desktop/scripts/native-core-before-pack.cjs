@@ -192,8 +192,16 @@ async function beforePack(context) {
   const platform =
     context?.electronPlatformName || context?.packager?.platform?.nodeName || process.platform;
   const validated = validatePackagedBackend({ platform });
+  const skipPrivatePki = String(process.env.CONTEXTBUDDY_SKIP_WINDOWS_SIGNING || "").trim() === "1";
   if (platform === "win32") {
-    stageWindowsPrivatePkiEvidence({ manifest: validated.manifest });
+    if (!skipPrivatePki) {
+      stageWindowsPrivatePkiEvidence({ manifest: validated.manifest });
+    } else {
+      console.warn(
+        "CONTEXTBUDDY_SKIP_WINDOWS_SIGNING=1: installing an unsigned Windows package; " +
+        "private-PKI update verification is disabled."
+      );
+    }
   } else if (platform === "darwin") {
     stageMacosPrivatePkiEvidence({ manifest: validated.manifest });
   }

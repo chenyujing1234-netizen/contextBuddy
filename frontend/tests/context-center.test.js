@@ -42,7 +42,7 @@ beforeEach(() => {
   api.updateContextSettings.mockReset().mockResolvedValue({ status: 'ok', settings: { wechat: { enabled: false }, browser_history: { enabled: true } } })
   api.triggerWechatSync.mockReset().mockResolvedValue({ status: 0, errmsg: 'ok', state: 'up_to_date', summary: { accounts: 1 } })
   api.getBrowserHistoryStatus.mockReset().mockResolvedValue({ status: 'ok', installed: false, installations: [], extension_name: 'AI对话导出 word/json/md' })
-  api.prepareBrowserExtension.mockReset().mockResolvedValue({ status: 'ok', extension_dir: 'C:\\data\\browser_history\\extension', upload_url: 'http://127.0.0.1:10392' })
+  api.prepareBrowserExtension.mockReset().mockResolvedValue({ status: 'ok', extension_dir: 'C:\\data\\browser_history\\extension', firefox_extension_dir: 'C:\\data\\browser_history\\extension\\firefox', upload_url: 'http://127.0.0.1:10392' })
   api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok' })
   api.openGptPlatform.mockReset().mockResolvedValue({ status: 'ok' })
   api.getBrowserConversations.mockReset().mockResolvedValue({ total: 0, conversations: [] })
@@ -119,9 +119,24 @@ describe('上下文中心首页', () => {
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
-    expect(w.text()).toContain('检测到 Chrome 已在运行，未重复启动')
+    expect(w.text()).toContain('检测到 Chrome / Edge 已在运行，未重复启动')
     expect(w.text()).toContain('chrome://extensions/')
     expect(w.text()).toContain('加载已解压的扩展程序')
+  })
+
+  it('选择 Firefox 时按 Firefox 引导安装并打开调试页', async () => {
+    api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok', ok: false, error: '未找到 Firefox 浏览器' })
+    const w = await mountHome()
+    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await flushPromises()
+    await w.find('select').setValue('firefox')
+    await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
+    await flushPromises()
+    expect(api.openBrowserExtensionPage).toHaveBeenCalledWith('firefox')
+    expect(w.text()).toContain('未能自动打开浏览器')
+    expect(w.text()).toContain('about:debugging#/runtime/this-firefox')
+    expect(w.text()).toContain('临时载入附加组件')
+    expect(w.text()).toContain('C:\\data\\browser_history\\extension\\firefox')
   })
 
   it('复制路径后安装步骤说明仍保持显示', async () => {
@@ -131,7 +146,7 @@ describe('上下文中心首页', () => {
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
-    const steps = '插件副本已生成（上传地址已指向本机），已打开浏览器扩展管理页，请按以下步骤完成安装：'
+    const steps = '插件副本已生成（上传地址已指向本机），已打开 Chrome / Edge 扩展管理页，请按以下步骤完成安装：'
     expect(w.text()).toContain(steps)
     await w.findAll('button').find(b => b.text() === '复制路径').trigger('click')
     await flushPromises()

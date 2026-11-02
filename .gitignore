@@ -39,6 +39,9 @@ pnpm-lock.yaml
 .env
 .env.*
 
+# 阿里云短信本地凭据（私有，不入库）
+/src/wechat_decrypt_tool/_sms_secret.py
+
 # Local dev repos and data
 /WxDatDecrypt/
 /echotrace/

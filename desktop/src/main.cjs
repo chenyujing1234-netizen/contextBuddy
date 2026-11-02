@@ -3500,7 +3500,11 @@ async function ensureMainWindowReady() {
 async function main() {
   await app.whenReady();
   if (app.isPackaged && process.platform === "win32") {
-    resolvePrivatePkiRuntime(process.resourcesPath);
+    try {
+      resolvePrivatePkiRuntime(process.resourcesPath);
+    } catch (error) {
+      logMain(`[private-pki] windows runtime verification skipped: ${error?.message || "unsigned package"}`);
+    }
   }
   if (app.isPackaged && process.platform === "darwin") {
     const evidence = ensureMacosPrivatePkiTrust({

@@ -1244,6 +1244,29 @@ export const useApi = () => {
     })
   }
 
+  // 手机号 + 验证码登录
+  const getAuthStatus = async () => {
+    return await request('/auth/status')
+  }
+
+  const sendAuthCode = async (phone) => {
+    return await request('/auth/send-code', {
+      method: 'POST',
+      body: { phone }
+    })
+  }
+
+  const loginWithCode = async (phone, code) => {
+    return await request('/auth/login', {
+      method: 'POST',
+      body: { phone, code }
+    })
+  }
+
+  const logoutAccount = async () => {
+    return await request('/auth/logout', { method: 'POST' })
+  }
+
   // 浏览器记录：扩展安装状态 / 生成扩展副本 / 打开扩展管理页 / 打开 GPT 平台
   const getBrowserHistoryStatus = async () => {
     return await request('/context/browser-history/status')
@@ -1345,6 +1368,10 @@ export const useApi = () => {
     getContextSettings,
     updateContextSettings,
     triggerWechatSync,
+    getAuthStatus,
+    sendAuthCode,
+    loginWithCode,
+    logoutAccount,
     getBrowserHistoryStatus,
     prepareBrowserExtension,
     openBrowserExtensionPage,

@@ -55,6 +55,7 @@ from .routers.biz import router as _biz_router
 from .routers.system import router as _system_router
 from .routers.cdn import router as _cdn_router
 from .routers.context import router as _context_router
+from .routers.auth import router as _auth_router
 from .browser_history import manage_router as _browser_history_manage_router
 from .browser_history import upload_router as _browser_history_upload_router
 
@@ -165,6 +166,7 @@ app.include_router(_record_export_router)
 app.include_router(_system_router)
 app.include_router(_cdn_router)
 app.include_router(_context_router)
+app.include_router(_auth_router)
 app.include_router(_browser_history_manage_router)
 app.include_router(_browser_history_upload_router)
 

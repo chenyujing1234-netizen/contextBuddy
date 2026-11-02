@@ -2,7 +2,7 @@
  * AI对话导出 word/json/md —— 浏览器扩展版 content script（页面主环境）
  * 本文件由 build-extension.js 从 scrollmerge.js 自动生成，请勿手工修改；
  * 修改逻辑请编辑源 scrollmerge.js，然后重新运行: node extension/build-extension.js
- * 生成时间: 2026-10-21T05:33:27.631Z
+ * 生成时间: 2026-10-23T07:23:34.489Z
  */
 
 (function() {
@@ -147,6 +147,10 @@
         warn: (msg, data) => console.warn(`[AI对话导出] WARN: ${msg}`, data || ''),
         error: (msg, error) => console.error(`[AI对话导出] ERROR: ${msg}`, error || '')
     };
+
+    // 脚本版本（与头部 @version 保持一致）：启动日志/批次上报都会携带，
+    // 便于排查"浏览器里实际还在跑旧版本"类问题
+    const SCRIPT_VERSION = '2026.10.23-3.scrollmerge';
 
     // 工具函数
     const utils = {
@@ -1594,10 +1598,57 @@
 
     // ============ 数据库上传模块 ============
     // 把当前已捕获的数据（单会话或批量导出的全部会话）上传到 MySQL 接收服务
+
+    // 右下角轻提示（自动任务的完成通知，不弹窗打断用户）
+    function showToast(text, ms) {
+        try {
+            const d = document.createElement('div');
+            d.textContent = text;
+            d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:999999;max-width:340px;' +
+                'padding:10px 14px;border-radius:8px;background:rgba(40,40,40,.92);color:#fff;font-size:13px;' +
+                'line-height:1.5;box-shadow:0 4px 12px rgba(0,0,0,.3);word-break:break-all;';
+            document.body.appendChild(d);
+            setTimeout(() => d.remove(), ms || 4000);
+        } catch (e) {}
+    }
+
     const uploader = {
         running: false,
         stopRequested: false,
         fetching: false, // 正在自动拉取全部会话
+        deviceId: '', // 本机设备标识(懒加载)，上传数据归属此标识，服务端按它隔离可下载的数据
+
+        // 获取设备标识(同一浏览器跨站点保持一致)：
+        //   1. 扩展版：经后台 chrome.storage 持久化(首次自动生成)——所有平台站点共享
+        //   2. 油猴版：GM 存储——同脚本所有站点共享
+        //   3. 兜底：localStorage(按站点隔离，仅单站点内一致)
+        getDeviceId: async function() {
+            if (this.deviceId) return this.deviceId;
+            const gen = () => 'dev-' + (crypto.randomUUID ? crypto.randomUUID()
+                : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12));
+            try {
+                const r = await autoSaver.bridgeRequest({ type: 'ext-get-device-id' }, 1500);
+                if (r && r.ok && r.deviceId) { this.deviceId = r.deviceId; return this.deviceId; }
+            } catch (e) { /* 非扩展环境 */ }
+            try {
+                if (typeof GM_getValue === 'function') {
+                    let id = GM_getValue('aiExportDeviceId');
+                    if (!id) {
+                        id = gen();
+                        if (typeof GM_setValue === 'function') GM_setValue('aiExportDeviceId', id);
+                    }
+                    this.deviceId = id; return this.deviceId;
+                }
+            } catch (e) { /* ignore */ }
+            try {
+                let id = localStorage.getItem('aiExportDeviceId');
+                if (!id) {
+                    id = gen();
+                    localStorage.setItem('aiExportDeviceId', id);
+                }
+                this.deviceId = id; return this.deviceId;
+            } catch (e) { return ''; }
+        },
 
         // 从页面 URL 提取当前会话 ID（仅单会话上传需要；批量上传的会话 ID 由数据自带）
         getConversationId: function() {
@@ -1649,7 +1700,8 @@
                     conversation: conversation,
                     conversation_id: ctx.conversation_id,
                     title: ctx.title,
-                    batch_type: ctx.batch_type
+                    batch_type: ctx.batch_type,
+                    device_id: this.deviceId || undefined // 数据归属的设备标识，服务端按它隔离可下载数据
                 });
                 if (r.status === 200 && r.json && r.json.ok) return { ok: true, count: r.json.message_count || 0, skipped: !!r.json.skipped };
                 return { ok: false, error: (r.json && r.json.error) || ('HTTP ' + r.status) };
@@ -1659,8 +1711,11 @@
         },
 
         // 主入口：可选"全部会话"（六平台自动拉取+增量上传）或仅当前会话
-        start: async function(button) {
+        // auto=true 时为每日自动上传模式：不弹确认框、失败不弹窗、完成改用右下角 toast 提示；
+        // 自动模式返回任务结果：'ok'=已上传 / 'empty'=昨天无匹配会话 / 'retry'=环境未就绪或临时失败(下次页面加载重试)
+        start: async function(button, auto) {
             if (this.running) {
+                if (auto) return 'retry'; // 自动任务不与手动操作抢跑道，下次页面加载再试
                 if (this.fetching) {
                     alert('正在拉取全部会话（进度见「📚 全部会话」按钮），如需中止请点该按钮。');
                     return;
@@ -1693,7 +1748,11 @@
             else if (batchPlatform === 'iflytek' && typeof iflytekBatchExporter !== 'undefined') exporter = iflytekBatchExporter;
 
             let fetchAll = false;
-            if (exporter) {
+            if (auto) {
+                // 每日自动上传：必须有批量导出器，且只走"全部会话"链路
+                if (!exporter) return 'retry';
+                fetchAll = true;
+            } else if (exporter) {
                 fetchAll = confirm('「⇧ 上传到数据库」\n\n【确定】上传全部会话：自动拉取左侧"最近"列表的全部会话并增量上传（已上传且无变化的自动跳过）\n【取消】仅上传当前打开的会话');
             }
             if (!fetchAll && !state.targetResponse) {
@@ -1705,14 +1764,32 @@
             this.stopRequested = false;
             setBtn('⇧ 上传中…', '#dc3545');
 
+            // 懒加载设备标识：数据归属此标识，服务端只允许下载该标识上传的数据
+            this.deviceId = await this.getDeviceId();
+
+            // 自动模式：暂存并清空当前捕获状态，防止旧的 targetResponse 被误当作本次结果上传；
+            // 结束后恢复，不影响用户手动导出/上传当前会话
+            if (auto) {
+                this._autoSaved = {
+                    targetResponse: state.targetResponse,
+                    platformType: state.platformType,
+                    currentTitle: state.currentTitle,
+                    messageStats: state.messageStats,
+                    convertedMd: state.convertedMd
+                };
+                state.targetResponse = null;
+            }
+
             try {
                 // 自动拉取全部会话（进度显示在「📚 全部会话」按钮上）
                 if (fetchAll) {
                     this.fetching = true;
                     setBtn('⇧ 拉取全部会话…', '#dc3545');
-                    const allBtn = document.getElementById('downloadAllSessionsButton');
+                    // 极端情况下按钮尚未创建（如自动任务早于 UI 初始化）时用占位对象兜底，避免报错
+                    const allBtn = document.getElementById('downloadAllSessionsButton') ||
+                        { style: {}, innerText: '' };
                     try {
-                        await exporter.start(allBtn);
+                        await exporter.start(allBtn, auto ? { filter: this._autoFilter, silent: true } : undefined);
                     } catch (e) {
                         throw new Error('拉取全部会话失败: ' + e.message);
                     } finally {
@@ -1722,7 +1799,15 @@
                 }
 
                 if (!state.targetResponse) {
-                    throw new Error('全部会话拉取完成，但没有获得可上传的数据');
+                    // 拉取未成功：导出器已弹窗提示过具体原因（无凭证/无会话/全失败/异常），
+                    // 不再重复弹误导性的"上传出错"
+                    const lr = exporter.lastResult;
+                    if (lr && lr.ok === false) {
+                        logger.warn(`全部会话拉取未成功（${lr.reason}），已取消上传`);
+                        if (auto) return lr.reason === '没有符合条件的会话' ? 'empty' : 'retry';
+                        return;
+                    }
+                    throw new Error('全部会话拉取没有获得可上传的数据');
                 }
 
                 const data = JSON.parse(state.targetResponse);
@@ -1756,6 +1841,7 @@
                     try {
                         const chk = await this.httpPost('/check', {
                             platform: platform,
+                            device_id: this.deviceId || undefined,
                             items: items.map(it => ({ conversation_id: idOf(it), updated: String(updOf(it)), count: cntOf(it) }))
                         });
                         if (chk.status === 200 && chk.json && chk.json.ok) {
@@ -1787,7 +1873,7 @@
                             conversation_count: okCount - skipCount,
                             message_count: msgTotal,
                             failed_count: failCount,
-                            client_version: '2026.10.21-4.scrollmerge',
+                            client_version: SCRIPT_VERSION,
                             exported_at: new Date().toISOString()
                         }).catch(() => {});
                     }
@@ -1803,26 +1889,140 @@
                 }
 
                 const stopNote = this.stopRequested ? '\n（已手动停止，剩余会话可再次点击继续上传）' : '';
-                if (okCount) {
-                    alert(`上传数据库完成${stopNote}\n上传 ${okCount - skipCount} 个会话 / ${msgTotal} 条消息` +
-                        (skipCount ? `\n跳过 ${skipCount} 个（库中已是最新）` : '') +
-                        (failCount ? `\n失败 ${failCount} 个：\n${failed.slice(0, 5).join('\n')}` : ''));
-                    logger.info(`数据库上传完成: 上传 ${okCount - skipCount} / 跳过 ${skipCount} / 失败 ${failCount}`);
+                if (auto) {
+                    // 自动模式：右下角 toast 轻提示，不弹窗打断用户
+                    if (okCount) {
+                        showToast(`☀ 每日自动上传完成：上传 ${okCount - skipCount} 个会话 / ${msgTotal} 条消息` +
+                            (skipCount ? `，跳过 ${skipCount} 个（库中已是最新）` : '') +
+                            (failCount ? `，失败 ${failCount} 个` : ''), 6000);
+                        logger.info(`每日自动上传完成: 上传 ${okCount - skipCount} / 跳过 ${skipCount} / 失败 ${failCount}`);
+                    } else if (failCount) {
+                        showToast(`☀ 每日自动上传失败 ${failCount} 个会话，详情见控制台日志`, 6000);
+                    }
                 } else {
-                    alert(`上传失败${stopNote}：\n${failed.join('\n')}`);
+                    const scopeNote = data.batch_export ? '' : '\n（本次仅上传当前打开的会话；要上传全部会话，请在弹窗中选择"确定"）';
+                    if (okCount) {
+                        alert(`上传数据库完成${stopNote}${scopeNote}\n上传 ${okCount - skipCount} 个会话 / ${msgTotal} 条消息` +
+                            (skipCount ? `\n跳过 ${skipCount} 个（库中已是最新）` : '') +
+                            (failCount ? `\n失败 ${failCount} 个：\n${failed.slice(0, 5).join('\n')}` : ''));
+                        logger.info(`数据库上传完成: 上传 ${okCount - skipCount} / 跳过 ${skipCount} / 失败 ${failCount}`);
+                    } else {
+                        alert(`上传失败${stopNote}：\n${failed.join('\n')}`);
+                    }
                 }
+                // 全部失败(如上传服务临时不可用)→retry 下次重试；部分失败/成功→ok 不再重试
+                if (auto) return (okCount === 0 && failCount > 0) ? 'retry' : 'ok';
             } catch (e) {
+                if (auto) {
+                    logger.error('每日自动上传出错', e);
+                    return 'retry';
+                }
                 alert('上传出错: ' + e.message);
                 logger.error('数据库上传出错', e);
             } finally {
                 this.running = false;
                 this.stopRequested = false;
                 setBtn(originalText);
+                // 自动模式：恢复暂存的捕获状态，清掉一次性筛选条件
+                if (auto) {
+                    if (this._autoSaved) {
+                        state.targetResponse = this._autoSaved.targetResponse;
+                        state.platformType = this._autoSaved.platformType;
+                        state.currentTitle = this._autoSaved.currentTitle;
+                        state.messageStats = this._autoSaved.messageStats;
+                        state.convertedMd = this._autoSaved.convertedMd;
+                        this._autoSaved = null;
+                        try { ui.updateButtonStatus(); } catch (e) {}
+                    }
+                    this._autoFilter = null;
+                }
+            }
+        },
+
+        // 每日自动上传：页面加载后延迟触发一次，把"昨天（本地时区自然日）有更新"的会话静默上传
+        // 每个平台每天只完成一次（localStorage 按天去重，仅在任务有终态结果后写入标记）；
+        // 凭证未就绪/临时失败不写标记，下次页面加载自动重试
+        autoDaily: async function() {
+            try {
+                const h = location.hostname;
+                const platform = h.includes('doubao') ? 'doubao'
+                    : h.includes('qianwen') ? 'qianwen'
+                    : h.includes('deepseek') ? 'deepseek'
+                    : h.includes('yuanbao') ? 'yuanbao'
+                    : h.includes('kimi') ? 'kimi'
+                    : h.includes('xfyun') ? 'iflytek'
+                    : null;
+                if (!platform) return; // 无批量导出器的平台不参与
+                const key = 'aiExportAutoDaily_' + platform;
+                const today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD（本地时区）
+                let last = '';
+                try { last = localStorage.getItem(key) || ''; } catch (e) {}
+                if (last === today) {
+                    // 静默跳过但留日志：便于排查"为什么今天不再自动上传"
+                    logger.info(`每日自动上传：${platform} 今天已完成过（标记=${last}），本次跳过`);
+                    return;
+                }
+
+                // 昨天自然日 = [昨天0点, 今天0点)（本地时区）
+                const now = new Date();
+                const yEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+                const yStart = yEnd - 86400000;
+                // 各平台列表项的更新时间字段名不一致，逐一尝试
+                const tOf = (it) => it.updated_at ?? it.update_time ?? it.last_replied_at ?? it.lastRepliedAt
+                    ?? it.updatedAt ?? it.updateTime ?? it.created_at ?? it.create_time ?? it.createTime ?? 0;
+                // 时间转毫秒：纯数字(含字符串形式,如豆包的 "1762889203")按秒/毫秒时间戳处理，其余按日期串解析
+                const toMs = (t) => {
+                    if (typeof t === 'number' && isFinite(t)) return t > 1e12 ? t : t * 1000;
+                    if (typeof t === 'string') {
+                        const s = t.trim();
+                        if (/^\d+$/.test(s)) { const n = Number(s); return n > 1e12 ? n : n * 1000; }
+                        const p = Date.parse(s); return isNaN(p) ? 0 : p;
+                    }
+                    return 0;
+                };
+                this._autoFilter = (it) => {
+                    const ms = toMs(tOf(it));
+                    return ms >= yStart && ms < yEnd;
+                };
+                const ymd = new Date(yStart).toLocaleDateString();
+                logger.info(`每日自动上传：检查 ${ymd} 有更新的会话...`);
+                showToast(`☀ 每日自动上传：正在检查 ${ymd} 的会话...`, 4000);
+                const r = await this.start(null, true);
+                if (r === 'retry') {
+                    logger.info('每日自动上传：环境未就绪或临时失败，不写标记，下次页面加载时重试');
+                    showToast('☀ 每日自动上传未完成（凭证未就绪或临时失败），下次打开页面自动重试', 6000);
+                    return;
+                }
+                // 有终态（已上传/无需上传）才写当天标记
+                try { localStorage.setItem(key, today); } catch (e) {}
+                if (r === 'empty') {
+                    logger.info(`每日自动上传：${ymd} 没有需要上传的会话`);
+                    showToast(`☀ 每日自动上传：${ymd} 没有需要上传的会话`, 5000);
+                }
+            } catch (e) {
+                logger.error('每日自动上传失败', e);
             }
         }
     };
 
     autoSaver.loadSettings(); // 启动时预取面板设置，供手动下载时确定保存目录
+
+    // 每日自动上传：页面加载 15 秒后触发一次（等待登录凭证捕获、避开页面初始化高峰），
+    // 每平台每天只跑一次；正在手动操作时自动让位（autoDaily/start 内部有守卫）
+    setTimeout(() => {
+        try { uploader.autoDaily(); } catch (e) {}
+    }, 15000);
+
+    // 调试钩子：控制台执行 __aiExport.triggerAutoDaily() 可立即手动触发每日自动上传（不受15秒等待限制，
+    // 但仍受"每天一次"标记约束——测试时可先 localStorage.removeItem('aiExportAutoDaily_<平台>')）
+    try {
+        const _dbgWin = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+        _dbgWin.__aiExport = {
+            version: SCRIPT_VERSION,
+            triggerAutoDaily: () => uploader.autoDaily()
+        };
+        logger.info(`调试钩子就绪：控制台可用 __aiExport.triggerAutoDaily() 手动触发每日自动上传（v${SCRIPT_VERSION}）`);
+    } catch (e) {}
 
     const exportHandlers = {
         json: () => {
@@ -2211,6 +2411,7 @@
     const doubaoBatchExporter = {
         running: false,
         stopRequested: false,
+        lastResult: null, // 最近一次 start 的结束状态 {ok, count} / {ok:false, reason}
         sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
         // 统计字数（与单会话导出的统计口径一致）
@@ -2223,9 +2424,11 @@
             }
         }, 0),
 
-        start: async function(button) {
-            // 运行中再点一次 = 请求停止
+        start: async function(button, opts) {
+            // opts.filter: 自动模式筛选函数(只导出符合条件的会话)；opts.silent: 静默(自动上传用,不弹窗不自动保存)
+            // 运行中再点一次 = 请求停止（自动任务不请求停止，直接让位）
             if (this.running) {
+                if (opts && opts.silent) return; // 用户正在手动导出，自动任务让位
                 this.stopRequested = true;
                 button.innerText = '⏹ 正在停止...';
                 return;
@@ -2244,14 +2447,23 @@
                     button.innerText = `⏳ 会话列表 ${count}...`;
                 });
                 if (!conversations.length) {
-                    alert('没有获取到任何会话。\n请确认已登录豆包且左侧"最近"列表非空，然后刷新页面重试。');
+                    this.lastResult = { ok: false, reason: '没有获取到任何会话' };
+                    if (!(opts && opts.silent)) alert('没有获取到任何会话。\n请确认已登录豆包且左侧"最近"列表非空，然后刷新页面重试。');
                     return;
                 }
                 logger.info(`豆包批量导出：共 ${conversations.length} 个会话`);
 
-                // 会话数量很大时让用户选择导出范围（全部导出可能耗时很久）
+                // 自动模式(opts.filter)：只导出符合条件的会话；否则超过50个让用户选择范围
                 let toExport = conversations;
-                if (conversations.length > 50) {
+                if (opts && typeof opts.filter === 'function') {
+                    toExport = conversations.filter(opts.filter);
+                    if (!toExport.length) {
+                        this.lastResult = { ok: false, reason: '没有符合条件的会话' };
+                        if (!opts.silent) alert('没有符合条件的会话（如：所选日期没有新的对话）。');
+                        return;
+                    }
+                    logger.info(`自动模式：筛选出 ${toExport.length} 个符合条件的会话`);
+                } else if (conversations.length > 50) {
                     const countText = conversations.length >= 1000
                         ? `${conversations.length}+ 个会话（已达列表拉取上限，仅含最近的1000个）`
                         : `${conversations.length} 个会话`;
@@ -2306,7 +2518,8 @@
                 }
 
                 if (!allJson.length) {
-                    alert('没有成功导出任何会话。' +
+                    this.lastResult = { ok: false, reason: '所有会话拉取失败' };
+                    if (!(opts && opts.silent)) alert('没有成功导出任何会话。' +
                         (failed.length ? `\n失败示例: ${failed[0].title} - ${failed[0].error}` : ''));
                     return;
                 }
@@ -2330,18 +2543,22 @@
                 });
                 state.convertedMd = `# 豆包全部会话导出（共 ${allJson.length} 个会话）\n\n` + allMd.join('\n\n');
                 ui.updateButtonStatus();
+                this.lastResult = { ok: true, count: allJson.length };
 
                 const stopNote = this.stopRequested ? '（已提前停止）' : '';
                 const failNote = failed.length
                     ? `\n失败 ${failed.length} 个: ${failed.map(f => f.title).slice(0, 5).join('、')}${failed.length > 5 ? ' 等' : ''}`
                     : '';
-                autoSaver.autoSaveIfNeeded('豆包批量导出');
-                alert(`豆包批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totalMessages} 条消息` +
-                    failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                if (!(opts && opts.silent)) {
+                    autoSaver.autoSaveIfNeeded('豆包批量导出');
+                    alert(`豆包批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totalMessages} 条消息` +
+                        failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                }
                 logger.info(`豆包批量导出完成: ${allJson.length} 会话 / ${totalMessages} 消息 / ${failed.length} 失败`);
             } catch (e) {
                 logger.error('豆包批量导出失败', e);
-                alert(`豆包批量导出失败: ${e.message}\n请刷新页面后重试。`);
+                this.lastResult = { ok: false, reason: e.message };
+                if (!(opts && opts.silent)) alert(`豆包批量导出失败: ${e.message}\n请刷新页面后重试。`);
             } finally {
                 this.running = false;
                 this.stopRequested = false;
@@ -2370,6 +2587,7 @@
     const qianwenBatchExporter = {
         running: false,
         stopRequested: false,
+        lastResult: null, // 最近一次 start 的结束状态 {ok, count} / {ok:false, reason}
         sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
 
         hasAuth: () => !!(state.qianwenAuth.deviceId && state.qianwenAuth.xsrf && state.qianwenAuth.userId),
@@ -2493,15 +2711,18 @@
             return acc + q + a;
         }, 0),
 
-        start: async function(button) {
-            // 运行中再点一次 = 请求停止
+        start: async function(button, opts) {
+            // opts.filter: 自动模式筛选函数(只导出符合条件的会话)；opts.silent: 静默(自动上传用,不弹窗不自动保存)
+            // 运行中再点一次 = 请求停止（自动任务不请求停止，直接让位）
             if (this.running) {
+                if (opts && opts.silent) return; // 用户正在手动导出，自动任务让位
                 this.stopRequested = true;
                 button.innerText = '⏹ 正在停止...';
                 return;
             }
             if (!this.hasAuth()) {
-                alert('还没有捕获到千问的登录凭证。\n\n请先刷新页面并打开一个对话，' +
+                this.lastResult = { ok: false, reason: '没有登录凭证' };
+                if (!(opts && opts.silent)) alert('还没有捕获到千问的登录凭证。\n\n请先刷新页面并打开一个对话，' +
                     '等左侧"最近"列表加载出来后再点此按钮。');
                 return;
             }
@@ -2519,15 +2740,24 @@
                     button.innerText = `⏳ 会话列表 ${count}...`;
                 });
                 if (!sessions.length) {
-                    alert('没有获取到任何会话。\n请确认已登录千问且左侧"最近"列表非空，然后刷新页面重试。');
+                    this.lastResult = { ok: false, reason: '没有获取到任何会话' };
+                    if (!(opts && opts.silent)) alert('没有获取到任何会话。\n请确认已登录千问且左侧"最近"列表非空，然后刷新页面重试。');
                     return;
                 }
                 sessions.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
                 logger.info(`千问批量导出：共 ${sessions.length} 个会话`);
 
-                // 会话数量很大时让用户选择导出范围（全部导出可能耗时很久）
+                // 自动模式(opts.filter)：只导出符合条件的会话；否则超过50个让用户选择范围
                 let toExport = sessions;
-                if (sessions.length > 50) {
+                if (opts && typeof opts.filter === 'function') {
+                    toExport = sessions.filter(opts.filter);
+                    if (!toExport.length) {
+                        this.lastResult = { ok: false, reason: '没有符合条件的会话' };
+                        if (!opts.silent) alert('没有符合条件的会话（如：所选日期没有新的对话）。');
+                        return;
+                    }
+                    logger.info(`自动模式：筛选出 ${toExport.length} 个符合条件的会话`);
+                } else if (sessions.length > 50) {
                     const countText = sessions.length >= 5000
                         ? `${sessions.length}+ 个会话（已达列表拉取上限）`
                         : `${sessions.length} 个会话`;
@@ -2576,7 +2806,8 @@
                 }
 
                 if (!allJson.length) {
-                    alert('没有成功导出任何会话。' +
+                    this.lastResult = { ok: false, reason: '所有会话拉取失败' };
+                    if (!(opts && opts.silent)) alert('没有成功导出任何会话。' +
                         (failed.length ? `\n失败示例: ${failed[0].title} - ${failed[0].error}` : ''));
                     return;
                 }
@@ -2600,18 +2831,22 @@
                 });
                 state.convertedMd = `# 千问全部会话导出（共 ${allJson.length} 个会话）\n\n` + allMd.join('\n\n');
                 ui.updateButtonStatus();
+                this.lastResult = { ok: true, count: allJson.length };
 
                 const stopNote = this.stopRequested ? '（已提前停止）' : '';
                 const failNote = failed.length
                     ? `\n失败 ${failed.length} 个: ${failed.map(f => f.title).slice(0, 5).join('、')}${failed.length > 5 ? ' 等' : ''}`
                     : '';
-                autoSaver.autoSaveIfNeeded('千问批量导出');
-                alert(`千问批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totalTurns} 轮对话` +
-                    failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                if (!(opts && opts.silent)) {
+                    autoSaver.autoSaveIfNeeded('千问批量导出');
+                    alert(`千问批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totalTurns} 轮对话` +
+                        failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                }
                 logger.info(`千问批量导出完成: ${allJson.length} 会话 / ${totalTurns} 轮 / ${failed.length} 失败`);
             } catch (e) {
                 logger.error('千问批量导出失败', e);
-                alert(`千问批量导出失败: ${e.message}\n请刷新页面后重试。`);
+                this.lastResult = { ok: false, reason: e.message };
+                if (!(opts && opts.silent)) alert(`千问批量导出失败: ${e.message}\n请刷新页面后重试。`);
             } finally {
                 this.running = false;
                 this.stopRequested = false;
@@ -2632,18 +2867,23 @@
         return {
         running: false,
         stopRequested: false,
+        lastResult: null, // 最近一次 start 的结束状态 {ok, count} / {ok:false, reason}
         sleep: spec.sleep,
 
-        start: async function(button) {
-            // 运行中再点一次 = 请求停止
+        start: async function(button, opts) {
+            // 运行中再点一次 = 请求停止（自动任务不请求停止，直接让位）
             if (this.running) {
+                if (opts && opts.silent) return; // 用户正在手动导出，自动任务让位
                 this.stopRequested = true;
                 button.innerText = '⏹ 正在停止...';
                 return;
             }
             if (spec.hasAuth && !spec.hasAuth()) {
-                alert(spec.noAuthHint ||
-                    '还没有捕获到登录凭证。\n\n请先打开一个对话（或刷新页面），等历史加载出来后再点此按钮。');
+                this.lastResult = { ok: false, reason: '没有登录凭证' };
+                if (!(opts && opts.silent)) {
+                    alert(spec.noAuthHint ||
+                        '还没有捕获到登录凭证。\n\n请先打开一个对话（或刷新页面），等历史加载出来后再点此按钮。');
+                }
                 return;
             }
 
@@ -2660,15 +2900,26 @@
                     button.innerText = `⏳ 会话列表 ${count}...`;
                 });
                 if (!conversations.length) {
-                    alert(`没有获取到任何会话。\n请确认已登录${spec.label}且会话列表非空，然后刷新页面重试。`);
+                    this.lastResult = { ok: false, reason: '没有获取到任何会话' };
+                    if (!(opts && opts.silent)) {
+                        alert(`没有获取到任何会话。\n请确认已登录${spec.label}且会话列表非空，然后刷新页面重试。`);
+                    }
                     return;
                 }
                 const ordered = spec.sortList ? spec.sortList(conversations) : conversations;
                 logger.info(`${spec.label}批量导出：共 ${ordered.length} 个会话`);
 
-                // 会话数量很大时让用户选择导出范围（全部导出可能耗时很久）
+                // 自动模式(opts.filter)：只导出符合条件的会话；否则超过50个让用户选择范围
                 let toExport = ordered;
-                if (ordered.length > 50) {
+                if (opts && typeof opts.filter === 'function') {
+                    toExport = ordered.filter(opts.filter);
+                    if (!toExport.length) {
+                        this.lastResult = { ok: false, reason: '没有符合条件的会话' };
+                        logger.info('自动模式：所选日期没有符合条件的会话，跳过');
+                        return;
+                    }
+                    logger.info(`自动模式：筛选出 ${toExport.length} 个符合条件的会话`);
+                } else if (ordered.length > 50) {
                     const ok = confirm(`共找到 ${ordered.length} 个会话。\n\n` +
                         `全部导出需要逐个拉取历史，可能耗时很久（可随时再次点击按钮停止）。\n\n` +
                         `【确定】导出全部\n【取消】只导出最近的 50 个`);
@@ -2703,7 +2954,8 @@
                 }
 
                 if (!allJson.length) {
-                    alert('没有成功导出任何会话。' +
+                    this.lastResult = { ok: false, reason: '所有会话拉取失败' };
+                    if (!(opts && opts.silent)) alert('没有成功导出任何会话。' +
                         (failed.length ? `\n失败示例: ${failed[0].title} - ${failed[0].error}` : ''));
                     return;
                 }
@@ -2727,18 +2979,24 @@
                 });
                 state.convertedMd = `# ${spec.label}全部会话导出（共 ${allJson.length} 个会话）\n\n` + allMd.join('\n\n');
                 ui.updateButtonStatus();
+                this.lastResult = { ok: true, count: allJson.length };
 
                 const stopNote = this.stopRequested ? '（已提前停止）' : '';
                 const failNote = failed.length
                     ? `\n失败 ${failed.length} 个: ${failed.map(f => f.title).slice(0, 5).join('、')}${failed.length > 5 ? ' 等' : ''}`
                     : '';
-                autoSaver.autoSaveIfNeeded(`${spec.label}批量导出`);
-                alert(`${spec.label}批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totals.summary}` +
-                    failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                if (!(opts && opts.silent)) {
+                    autoSaver.autoSaveIfNeeded(`${spec.label}批量导出`);
+                    alert(`${spec.label}批量导出完成${stopNote}：\n成功 ${allJson.length} 个会话 / ${totals.summary}` +
+                        failNote + '\n\n扩展面板开启自动保存后，文件会自动存入设定的目录；\n也可点击 JSON / MD / Word 按钮手动保存。');
+                }
                 logger.info(`${spec.label}批量导出完成: ${allJson.length} 会话 / ${failed.length} 失败`);
             } catch (e) {
                 logger.error(`${spec.label}批量导出失败`, e);
-                alert(`${spec.label}批量导出失败: ${e.message}\n请刷新页面后重试。`);
+                this.lastResult = { ok: false, reason: e.message };
+                if (!(opts && opts.silent)) {
+                    alert(`${spec.label}批量导出失败: ${e.message}\n请刷新页面后重试。`);
+                }
             } finally {
                 this.running = false;
                 this.stopRequested = false;
@@ -2904,7 +3162,7 @@
         label: '元宝',
         platformType: 'yuanbao',
         hasAuth: () => !!(state.yuanbaoListReq && state.yuanbaoListReq.headers),
-        noAuthHint: '还没有捕获到元宝的请求凭证。\n\n请先刷新元宝页面、打开任意一个历史对话，再点此按钮。',
+        noAuthHint: '还没有捕获到元宝的请求凭证。\n\n请先在元宝页面上下滚动一下左侧"最近"会话列表，或点开任意一个历史对话（触发一次列表请求），然后再重新上传。',
         setBusy: (on) => { state.yuanbaoBatchBusy = on; },
 
         listBody: function() {
@@ -2924,8 +3182,8 @@
 
             while (sessions.length < total && pages < 100) {
                 const body = { ...this.listBody(), page_size: 40 };
-                if (lastRepliedAt === undefined) delete body.last_replied_at;
-                else body.last_replied_at = lastRepliedAt;
+                // 首页 last_replied_at=0（与页面真实请求一致，缺该字段可能被服务端判参数错误）
+                body.last_replied_at = lastRepliedAt === undefined ? 0 : lastRepliedAt;
 
                 const resp = await withBatchRetry(() => fetch('https://yuanbao.tencent.com/api/user/agent/conversation/v3/list', {
                     method: 'POST',
@@ -2961,13 +3219,14 @@
         sortList: (list) => list, // 接口本身按最近回复降序返回
         convTitle: (s) => s.title || `未命名会话_${s.id}`,
 
-        // 拉取单个会话的完整消息：先裸请求一次；若列表接口给的maxIndex大于收集数，
-        // 则依次探测分页参数（优先学习页面滚动时捕获的参数名，再试常见候选），找到能返回
-        // 新消息的参数后循环翻页直到取满/无新增
+        // 拉取单个会话的完整消息（v1/detail 已从 GET 改为 POST，2026-10-22 实测）：
+        // POST body {conversationId, agentId, offset, limit}，响应顶层即会话对象（convs 数组）
+        // 分页为 index 游标：offset=0 从最新开始取倒序 limit 条；翻页 offset=本页最小 index
+        // （取 index < offset 的消息），hasMore=true 表示还有更早消息
         fetchMessages: async function(s) {
             const convId = String(s.id ?? s.conversationId ?? '');
-            const base = 'https://yuanbao.tencent.com/api/user/agent/conversation/v1/detail?conversation_id=' + encodeURIComponent(convId);
-            const headers = state.yuanbaoListReq?.headers || {};
+            const agentId = String(s.agentId || '');
+            const headers = Object.assign({ 'Content-Type': 'application/json' }, state.yuanbaoListReq?.headers || {});
             const collected = new Map();
             const addAll = (arr) => {
                 let n = 0;
@@ -2980,48 +3239,25 @@
                 }
                 return n;
             };
-            const fetchOnce = async (url) => {
-                const resp = await withBatchRetry(() => fetch(url, { headers, credentials: 'include' }), '元宝会话消息');
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                return resp.json();
-            };
-
-            const first = await fetchOnce(base);
-            addAll(first.convs || []);
-            const maxIndex = Number(s.maxIndex || 0);
-
-            if (maxIndex > collected.size) {
-                // 探测分页参数：从页面滚动时捕获的带参detail query学习参数名 + 常见候选
-                const paramNames = ['last_id', 'last_index', 'before_id', 'before_index', 'cursor', 'offset', 'start_index'];
-                if (state.yuanbaoDetailQuery) {
-                    try {
-                        const p = new URLSearchParams(state.yuanbaoDetailQuery.slice(1));
-                        for (const k of p.keys()) {
-                            if (k !== 'conversation_id' && !k.toLowerCase().includes('cache') && !k.toLowerCase().includes('bust')) {
-                                paramNames.unshift(k);
-                            }
-                        }
-                    } catch (e) { /* 忽略解析失败 */ }
-                }
-                const oldestOf = () => [...collected.values()]
-                    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))[0];
-
-                for (const name of [...new Set(paramNames)]) {
-                    if (collected.size >= maxIndex) break;
-                    let guard = 0;
-                    while (guard < 200 && collected.size < maxIndex) {
-                        const anchor = oldestOf();
-                        if (!anchor) break;
-                        const v = name.includes('index') ? anchor.index : anchor.id;
-                        if (v === undefined || v === null) break;
-                        let j2;
-                        try { j2 = await fetchOnce(`${base}&${name}=${encodeURIComponent(v)}`); }
-                        catch (e) { break; }
-                        if (addAll(j2.convs || []) === 0) break; // 该参数无新增，换下一个候选
-                        guard++;
-                        await this.sleep(150);
-                    }
-                }
+            const LIMIT = 50;
+            let offset = 0, guard = 0;
+            while (guard < 200) {
+                guard++;
+                const j = await withBatchRetry(() => fetch('https://yuanbao.tencent.com/api/user/agent/conversation/v1/detail', {
+                    method: 'POST',
+                    headers: headers,
+                    credentials: 'include',
+                    body: JSON.stringify({ conversationId: convId, agentId: agentId, offset: offset, limit: LIMIT })
+                }).then(resp => {
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    return resp.json();
+                }), '元宝会话消息');
+                const page = j.convs || [];
+                if (!page.length) break;
+                addAll(page);
+                offset = Math.min(...page.map(c => Number(c.index ?? 0)));
+                if (j.hasMore === false || page.length < LIMIT) break;
+                await this.sleep(150);
             }
             return [...collected.values()].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
         },
@@ -3854,7 +4090,7 @@
     function initialize() {
        // setupNetworkInterception();
         ui.createDownloadButtons();
-        logger.info('增强版导出脚本已启动');
+        logger.info(`增强版导出脚本已启动 v${SCRIPT_VERSION}`);
 
         // 使用MutationObserver确保按钮存在
         const observer = new MutationObserver((mutations) => {

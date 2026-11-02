@@ -28,6 +28,16 @@ const specDir = path.join(repoRoot, "desktop", "build", "pyinstaller-spec");
 const nativeDir = path.join(repoRoot, "src", "wechat_decrypt_tool", "native");
 const runtimeNativeDir = path.join(repoRoot, "desktop", "build", "native-runtime");
 const skillDir = path.join(repoRoot, "skills", "wechat-mcp-copilot");
+const browserExtensionVendorDir = path.join(
+  repoRoot,
+  "src",
+  "wechat_decrypt_tool",
+  "browser_extension_src"
+);
+// 浏览器扩展「AI对话导出 word/json/md」的素材源目录（Chrome/Firefox 两版）。
+// 每次打包时从该目录把最新插件同步进 vendor，再随后端 exe 一起分发。
+const DEFAULT_BROWSER_EXTENSION_SOURCE_DIR =
+  "D:\\weChat_assistance\\素材\\专辑、通用知识-AI落地应用分享\\第349期、AI对话导出wordjsonmd - DeepSeek纳米腾讯元宝Kimi通义千问讯飞星火豆包\\src\\extension";
 const macosXkeyContractPath = path.join(
   repoRoot,
   "src",
@@ -597,11 +607,47 @@ function pyInstallerAddData(sourcePath, targetPath) {
   return `${sourcePath}${path.delimiter}${targetPath}`;
 }
 
+function syncBrowserExtensionVendor({ env = process.env } = {}) {
+  const raw = String(env.WCE_BROWSER_EXTENSION_SOURCE_DIR || "").trim();
+  const sourceRoot = path.resolve(raw || DEFAULT_BROWSER_EXTENSION_SOURCE_DIR);
+  const chromeDir = path.join(sourceRoot, "chrome");
+  const firefoxDir = path.join(sourceRoot, "firefox");
+  const chromeManifest = path.join(chromeDir, "manifest.json");
+  const firefoxManifest = path.join(firefoxDir, "manifest.json");
+  if (!fs.existsSync(chromeManifest) && !fs.existsSync(firefoxManifest)) {
+    console.warn(
+      `[build-backend] 浏览器扩展素材源缺失（${sourceRoot}），跳过同步，使用仓库内已提交的 vendor 副本。`
+    );
+    return;
+  }
+  // Chrome 版落 vendor 根目录（兼容既有扁平布局），Firefox 版落 vendor/firefox/ 子目录。
+  if (fs.existsSync(chromeManifest)) {
+    for (const name of fs.readdirSync(chromeDir)) {
+      fs.cpSync(path.join(chromeDir, name), path.join(browserExtensionVendorDir, name), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+  if (fs.existsSync(firefoxManifest)) {
+    const firefoxDst = path.join(browserExtensionVendorDir, "firefox");
+    fs.mkdirSync(firefoxDst, { recursive: true });
+    for (const name of fs.readdirSync(firefoxDir)) {
+      fs.cpSync(path.join(firefoxDir, name), path.join(firefoxDst, name), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+  console.log(`[build-backend] 已同步浏览器扩展（chrome + firefox）-> ${browserExtensionVendorDir}`);
+}
+
 function main() {
   fs.mkdirSync(distDir, { recursive: true });
   fs.mkdirSync(workDir, { recursive: true });
   fs.mkdirSync(specDir, { recursive: true });
 
+  syncBrowserExtensionVendor();
   const integrityNativeBinary = buildIntegrityNativeBinary();
   prepareRuntimeNativeDir(nativeDir, runtimeNativeDir);
   stageNativeCoreArtifacts();
@@ -657,6 +703,8 @@ function main() {
     pyInstallerAddData(path.join(repoRoot, "src/wechat_decrypt_tool/resources/voice_models.json"), "wechat_decrypt_tool/resources"),
     "--add-data",
     pyInstallerAddData(path.join(repoRoot, "src/wechat_decrypt_tool/resources/qwen_gpu_runtime.json"), "wechat_decrypt_tool/resources"),
+    "--add-data",
+    pyInstallerAddData(browserExtensionVendorDir, "wechat_decrypt_tool/browser_extension_src"),
     "--collect-all",
     "watchfiles",
     ...aiPackagingArgs(repoRoot),

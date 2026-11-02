@@ -821,39 +821,54 @@ def extension_copy_dir() -> Path:
     return _browser_history_root() / "extension"
 
 
-def ensure_extension_copy() -> dict[str, Any]:
-    """把 vendor 扩展复制到数据目录并 patch（上传地址指向本机后端）。幂等。"""
-    if not _VENDOR_DIR.is_dir():
-        raise HTTPException(500, f"扩展源目录缺失：{_VENDOR_DIR}")
-    dst = extension_copy_dir()
-    dst.mkdir(parents=True, exist_ok=True)
+def _copy_and_patch_extension(src: Path, dst_root: Path) -> None:
+    """把单个浏览器版本的扩展复制到目标目录，并 patch host_permissions 与上传地址。"""
+    dst_root.mkdir(parents=True, exist_ok=True)
     for name in ("manifest.json", "background.js", "bridge.js", "content.js", "popup.html", "popup.js"):
-        shutil.copy2(_VENDOR_DIR / name, dst / name)
-    (dst / "icons").mkdir(exist_ok=True)
+        shutil.copy2(src / name, dst_root / name)
+    (dst_root / "icons").mkdir(exist_ok=True)
     for icon in ("icon16.png", "icon48.png", "icon128.png"):
-        shutil.copy2(_VENDOR_DIR / "icons" / icon, dst / "icons" / icon)
+        shutil.copy2(src / "icons" / icon, dst_root / "icons" / icon)
 
     # patch manifest：host_permissions 增加本机后端，允许扩展后台跨域上传
-    manifest = json.loads((dst / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((dst_root / "manifest.json").read_text(encoding="utf-8"))
     hosts = manifest.setdefault("host_permissions", [])
-    if f"http://127.0.0.1/*" not in hosts and f"http://localhost/*" not in hosts:
-        hosts.append("http://127.0.0.1/*")
-        hosts.append("http://localhost/*")
-    (dst / "manifest.json").write_text(
+    for host in ("http://127.0.0.1/*", "http://localhost/*"):
+        if host not in hosts:
+            hosts.append(host)
+    (dst_root / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=4), encoding="utf-8"
     )
 
     # patch content.js：上传服务地址指向本机
-    content = (dst / "content.js").read_text(encoding="utf-8")
+    content = (dst_root / "content.js").read_text(encoding="utf-8")
     content = re.sub(
         r"UPLOAD_SERVER:\s*\{[^}]*\}",
         f"UPLOAD_SERVER: {{\n            url: '{UPLOAD_BASE_URL}',\n            token: '{UPLOAD_TOKEN}'\n        }}",
         content,
         count=1,
     )
-    (dst / "content.js").write_text(content, encoding="utf-8")
+    (dst_root / "content.js").write_text(content, encoding="utf-8")
+
+
+def ensure_extension_copy() -> dict[str, Any]:
+    """把 vendor 扩展（Chrome 根目录 + Firefox 子目录）复制到数据目录并 patch。幂等。"""
+    if not _VENDOR_DIR.is_dir():
+        raise HTTPException(500, f"扩展源目录缺失：{_VENDOR_DIR}")
+    dst = extension_copy_dir()
+    _copy_and_patch_extension(_VENDOR_DIR, dst)
+
+    firefox_src = _VENDOR_DIR / "firefox"
+    firefox_dir = None
+    if firefox_src.is_dir():
+        _copy_and_patch_extension(firefox_src, dst / "firefox")
+        firefox_dir = str(dst / "firefox")
+
     logger.info("[browser_history] 扩展副本已生成 dir=%s upload_url=%s", dst, UPLOAD_BASE_URL)
-    return {"extension_dir": str(dst), "upload_url": UPLOAD_BASE_URL}
+    result: dict[str, Any] = {"extension_dir": str(dst), "upload_url": UPLOAD_BASE_URL}
+    if firefox_dir:
+        result["firefox_extension_dir"] = firefox_dir
+    return result
 
 
 # ---------------- 安装检测 ----------------
@@ -861,6 +876,8 @@ def ensure_extension_copy() -> dict[str, Any]:
 # 商店正式版「AI对话导出 word/json/md」的固定扩展 ID（Chrome Web Store 安装版，
 # 版本描述：支持 DeepSeek、纳米AI、腾讯元宝、Kimi、通义千问、讯飞星火、豆包）
 STORE_EXTENSION_ID = "cjdpniadfgdaekgbcdfbkoiilhmcdkge"
+# Firefox 版扩展在 browser_specific_settings.gecko.id 中声明的固定 ID
+FIREFOX_EXTENSION_ID = "ai-dialog-export@scrollmerge.extension"
 
 
 def _browser_profile_dirs() -> list[tuple[str, Path]]:
@@ -882,12 +899,50 @@ def _browser_profile_dirs() -> list[tuple[str, Path]]:
     return out
 
 
+def _firefox_extension_installations() -> list[dict[str, str]]:
+    """扫描 Firefox 各 profile 的 extensions.json，命中扩展 ID/名称即视为已安装。"""
+    out: list[dict[str, str]] = []
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return out
+    profiles_root = Path(appdata) / "Mozilla" / "Firefox" / "Profiles"
+    if not profiles_root.is_dir():
+        return out
+    for profile in profiles_root.iterdir():
+        ext_json = profile / "extensions.json"
+        try:
+            data = json.loads(ext_json.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        addons = data.get("addons")
+        if not isinstance(addons, list):
+            continue
+        for addon in addons:
+            if not isinstance(addon, dict):
+                continue
+            ext_id = str(addon.get("id") or "")
+            name = str(
+                (addon.get("defaultLocale") or {}).get("name") or addon.get("name") or ""
+            )
+            if ext_id == FIREFOX_EXTENSION_ID or EXTENSION_NAME in name:
+                out.append({
+                    "browser": "Firefox",
+                    "profile": profile.name,
+                    "extension_id": ext_id,
+                    "name": name or EXTENSION_NAME,
+                    "path": str(ext_json),
+                })
+                break
+    return out
+
+
 def detect_extension_install() -> dict[str, Any]:
-    """扫描 Chrome/Edge 各 profile 检测扩展安装状态（三种途径任一命中即已安装）。
+    """扫描 Chrome/Edge/Firefox 各 profile 检测扩展安装状态（任一途径命中即已安装）。
 
     1. Preferences/Secure Preferences 中扩展名称包含「AI对话导出 word/json/md」（本地加载副本）
     2. 扩展配置中存在商店正式版的固定 ID（cjdpniadfgdaekgbcdfbkoiilhmcdkge）
     3. profile 的 Extensions/<商店版固定ID>/ 目录存在（商店安装的落盘位置，不依赖 Preferences 解析）
+    4. Firefox 的 extensions.json 中存在 gecko 固定 ID（ai-dialog-export@scrollmerge.extension）
     """
     found: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -930,6 +985,16 @@ def detect_extension_install() -> dict[str, Any]:
         if store_dir.is_dir():
             add(browser, profile.name, STORE_EXTENSION_ID, EXTENSION_NAME, str(store_dir))
 
+    # Firefox：读取 extensions.json 中的 addons 列表
+    for firefox_install in _firefox_extension_installations():
+        add(
+            firefox_install["browser"],
+            firefox_install["profile"],
+            firefox_install["extension_id"],
+            firefox_install["name"],
+            firefox_install["path"],
+        )
+
     return {
         "installed": bool(found),
         "installations": found,
@@ -938,7 +1003,11 @@ def detect_extension_install() -> dict[str, Any]:
     }
 
 
-_EXTENSION_PAGE_URLS = {"chrome": "chrome://extensions/", "edge": "edge://extensions/"}
+_EXTENSION_PAGE_URLS = {
+    "chrome": "chrome://extensions/",
+    "edge": "edge://extensions/",
+    "firefox": "about:debugging#/runtime/this-firefox",
+}
 
 
 def _winreg_value(root, subkey: str, name: str = "") -> Optional[str]:
@@ -1011,10 +1080,16 @@ def _candidate_browser_exes(kind: str) -> list[str]:
             os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
             os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
         ]
-    else:
+    elif kind == "edge":
         exes += [
             os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
             os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+    elif kind == "firefox":
+        exes += [
+            os.path.expandvars(r"%ProgramFiles%\Mozilla Firefox\firefox.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Mozilla Firefox\firefox.exe"),
         ]
     # 去重、仅保留真实存在的文件
     seen: set[str] = set()
@@ -1052,12 +1127,17 @@ def open_extensions_page(browser: str = "chrome") -> dict[str, Any]:
     """直接用浏览器可执行文件打开扩展管理页，不弹系统「选择应用」对话框。
 
     浏览器已在运行则不再重复启动（返回 already_running 标记）；未运行才启动，
-    chrome.exe 带上 chrome://extensions/ 参数启动后自动打开扩展管理页。
-    Chrome 找不到时自动降级 Edge。
+    带上扩展管理页地址参数启动后自动打开对应页面。
+    Chrome 找不到时自动降级 Edge；Firefox（about:debugging）用于临时加载已解压扩展。
     """
     import subprocess
 
-    order = ["edge"] if browser == "edge" else ["chrome", "edge"]
+    if browser == "firefox":
+        order = ["firefox"]
+    elif browser == "edge":
+        order = ["edge"]
+    else:
+        order = ["chrome", "edge"]
     for kind in order:
         exes = _candidate_browser_exes(kind)
         if not exes:
@@ -1074,7 +1154,7 @@ def open_extensions_page(browser: str = "chrome") -> dict[str, Any]:
             return {"ok": True, "browser": kind, "url": url}
     return {
         "ok": False,
-        "error": "未找到 Chrome/Edge 浏览器，请手动打开浏览器，在地址栏输入 chrome://extensions/ 进入扩展管理页",
+        "error": "未找到 Chrome/Edge/Firefox 浏览器，请手动打开浏览器扩展管理页加载扩展",
     }
 
 
