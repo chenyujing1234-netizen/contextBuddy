@@ -2,7 +2,7 @@
  * AI对话导出 word/json/md —— 浏览器扩展版 content script（页面主环境）
  * 本文件由 build-extension.js 从 scrollmerge.js 自动生成，请勿手工修改；
  * 修改逻辑请编辑源 scrollmerge.js，然后重新运行: node extension/build-extension.js
- * 生成时间: 2026-10-23T07:23:34.489Z
+ * 生成时间: 2026-11-02T12:44:08.333Z
  */
 
 (function() {
@@ -150,7 +150,7 @@
 
     // 脚本版本（与头部 @version 保持一致）：启动日志/批次上报都会携带，
     // 便于排查"浏览器里实际还在跑旧版本"类问题
-    const SCRIPT_VERSION = '2026.10.23-3.scrollmerge';
+    const SCRIPT_VERSION = '2026.11.2-1.scrollmerge';
 
     // 工具函数
     const utils = {
@@ -1042,9 +1042,41 @@
 
     };
 
+    // 平台登录用户名捕获：截获用户信息类接口响应(如豆包 /alice/profile/self)，
+    // 提取昵称/用户名存入 state.accountName，上传时随会话带到服务端 conversations.account_name。
+    // 只依赖页面自身发起的请求(无需重放，避开签名问题)，解析失败静默忽略
+    function scanAccountName(url, text) {
+        try {
+            if (!/user|profile|account|member|mine/i.test(url)) return;
+            if (typeof text !== 'string' || !text.length || text.length > 300000 || text[0] !== '{') return;
+            const data = JSON.parse(text);
+            const pick = (o, depth) => {
+                if (!o || typeof o !== 'object' || depth > 3) return '';
+                // 昵称类字段优先(name 最后兜底，避免误取模型名等)
+                const keys = ['nickname', 'nick_name', 'nickName', 'userName', 'username', 'accountName',
+                    'display_name', 'displayName', 'full_name', 'fullName', 'name'];
+                for (const k of keys) {
+                    const v = o[k];
+                    if (typeof v === 'string' && v.trim() && v.length <= 40 && !/^https?:/.test(v.trim())) return v.trim();
+                }
+                for (const v of Object.values(o)) {
+                    if (v && typeof v === 'object') { const r = pick(v, depth + 1); if (r) return r; }
+                }
+                return '';
+            };
+            const name = pick(data, 0);
+            if (name && name !== state.accountName) {
+                state.accountName = name;
+                logger.info(`已捕获平台登录用户名: ${name}（来源 ${String(url).slice(0, 80)}）`);
+            }
+        } catch (e) { /* 忽略解析失败 */ }
+    }
+
     // 核心处理函数
     async function processTargetResponse(text, url) {
         try {
+            scanAccountName(url, text); // 顺带捕获平台登录用户名(用户信息类接口)
+
             //console.log('=== 开始处理响应 ===');
             //console.log('URL:', url);
             //console.log('响应长度:', text.length);
@@ -1617,6 +1649,7 @@
         stopRequested: false,
         fetching: false, // 正在自动拉取全部会话
         deviceId: '', // 本机设备标识(懒加载)，上传数据归属此标识，服务端按它隔离可下载的数据
+        phone: '', // 用户手机号(ContextBuddy 桌面端登录账号，懒加载)，上传数据的用户归属标识
 
         // 获取设备标识(同一浏览器跨站点保持一致)：
         //   1. 扩展版：经后台 chrome.storage 持久化(首次自动生成)——所有平台站点共享
@@ -1648,6 +1681,25 @@
                 }
                 this.deviceId = id; return this.deviceId;
             } catch (e) { return ''; }
+        },
+
+        // 获取用户手机号(ContextBuddy 桌面端登录后写入扩展目录 account.json)：
+        //   1. 扩展版：后台读取扩展目录下 account.json 的 phone 字段(chrome.runtime.getURL)
+        //   2. 油猴版：GM 存储(点击面板上的「👤 用户」标签可手动设置)
+        //   取不到(未登录)返回 ''，此时上传会被拒绝(服务端也强制校验)
+        getPhone: async function() {
+            if (this.phone) return this.phone; // 已取到则缓存(页面刷新后重新读取)
+            try {
+                const r = await autoSaver.bridgeRequest({ type: 'ext-get-phone' }, 1500);
+                if (r && r.ok && r.phone) { this.phone = r.phone; return this.phone; }
+            } catch (e) { /* 非扩展环境 */ }
+            try {
+                if (typeof GM_getValue === 'function') {
+                    const p = String(GM_getValue('aiExportPhone') || '');
+                    if (/^1[3-9]\d{9}$/.test(p)) { this.phone = p; return this.phone; }
+                }
+            } catch (e) { /* ignore */ }
+            return '';
         },
 
         // 从页面 URL 提取当前会话 ID（仅单会话上传需要；批量上传的会话 ID 由数据自带）
@@ -1701,7 +1753,9 @@
                     conversation_id: ctx.conversation_id,
                     title: ctx.title,
                     batch_type: ctx.batch_type,
-                    device_id: this.deviceId || undefined // 数据归属的设备标识，服务端按它隔离可下载数据
+                    device_id: this.deviceId || undefined, // 数据归属的设备标识，服务端按它隔离可下载数据
+                    phone: this.phone || undefined, // 用户标识(ContextBuddy 登录手机号)，服务端按它归属数据
+                    account_name: state.accountName || undefined // AI 平台登录用户名(自动捕获，随会话存储)
                 });
                 if (r.status === 200 && r.json && r.json.ok) return { ok: true, count: r.json.message_count || 0, skipped: !!r.json.skipped };
                 return { ok: false, error: (r.json && r.json.error) || ('HTTP ' + r.status) };
@@ -1781,6 +1835,18 @@
             }
 
             try {
+                // 用户门控：必须检测到 ContextBuddy 登录用户(扩展目录 account.json)才能上传
+                // 放在 try 内让 finally 统一复位按钮与 running 状态
+                const phone = await this.getPhone();
+                if (!phone) {
+                    if (auto) {
+                        logger.info('每日自动上传：未检测到用户身份（ContextBuddy 未登录），本次跳过');
+                        return 'no-user';
+                    }
+                    alert('未检测到用户身份，无法上传。\n\n请先在 ContextBuddy 桌面端登录账号（会自动在插件目录生成用户标识文件），然后刷新本页面。\n油猴脚本用户：点击面板上的「👤 用户」标签手动设置手机号。');
+                    return;
+                }
+
                 // 自动拉取全部会话（进度显示在「📚 全部会话」按钮上）
                 if (fetchAll) {
                     this.fetching = true;
@@ -1842,6 +1908,7 @@
                         const chk = await this.httpPost('/check', {
                             platform: platform,
                             device_id: this.deviceId || undefined,
+                            phone: this.phone || undefined, // 用户标识，服务端按用户维度做增量判重
                             items: items.map(it => ({ conversation_id: idOf(it), updated: String(updOf(it)), count: cntOf(it) }))
                         });
                         if (chk.status === 200 && chk.json && chk.json.ok) {
@@ -1988,6 +2055,11 @@
                 logger.info(`每日自动上传：检查 ${ymd} 有更新的会话...`);
                 showToast(`☀ 每日自动上传：正在检查 ${ymd} 的会话...`, 4000);
                 const r = await this.start(null, true);
+                if (r === 'no-user') {
+                    // 未登录 ContextBuddy：不算失败也不写标记，登录后刷新页面即可自动补传
+                    logger.info('每日自动上传：未检测到用户身份，等 ContextBuddy 登录后刷新页面自动补传');
+                    return;
+                }
                 if (r === 'retry') {
                     logger.info('每日自动上传：环境未就绪或临时失败，不写标记，下次页面加载时重试');
                     showToast('☀ 每日自动上传未完成（凭证未就绪或临时失败），下次打开页面自动重试', 6000);
@@ -3571,6 +3643,7 @@
             const mdButton = document.createElement('button');
             const wordButton = document.createElement('button');
             const uploadButton = document.createElement('button');
+            const userLabel = document.createElement('button');
 
             // 容器样式
             Object.assign(buttonContainer.style, {
@@ -3620,6 +3693,57 @@
             uploadButton.innerText = '⇧ 上传';
             uploadButton.title = '把当前已捕获的对话（或批量导出的全部会话）上传到数据库';
             uploadButton.style.backgroundColor = '#6f42c1';
+
+            // 用户标识标签：显示当前登录用户（ContextBuddy 手机号），未登录时点击可查看说明/手动设置
+            userLabel.id = 'aiExportUserLabel';
+            const refreshUserLabel = (phone) => {
+                if (phone) {
+                    userLabel.innerText = '👤 ' + phone.slice(0, 3) + '****' + phone.slice(-4);
+                    userLabel.style.backgroundColor = '#17a2b8';
+                    userLabel.title = `当前用户：${phone}\n上传的会话数据归属此账号`;
+                } else {
+                    userLabel.innerText = '👤 未登录';
+                    userLabel.style.backgroundColor = '#6c757d';
+                    userLabel.title = '未检测到用户身份（ContextBuddy 未登录）\n登录后才能上传数据到服务端\n点击查看说明';
+                }
+            };
+            (async () => {
+                try { refreshUserLabel(await uploader.getPhone()); } catch (e) { /* ignore */ }
+            })();
+            userLabel.onclick = async () => {
+                // 先探测是否扩展环境（扩展有 bridge 应答；油猴环境 bridgeRequest 超时返回 null）
+                const r = await autoSaver.bridgeRequest({ type: 'ext-get-phone' }, 1500);
+                if (r) {
+                    // 扩展环境：身份由 ContextBuddy 桌面端登录后自动写入，手动刷新一次
+                    uploader.phone = '';
+                    const phone = await uploader.getPhone();
+                    refreshUserLabel(phone);
+                    if (!phone) {
+                        showToast('用户身份由 ContextBuddy 桌面端管理：\n请先在桌面端登录账号（会自动同步到插件），然后刷新本页面。', 6000);
+                    }
+                    return;
+                }
+                // 油猴环境：手动设置手机号
+                const input = prompt('请输入你的手机号（用户标识，上传数据归属此账号）：', uploader.phone || '');
+                if (input === null) return;
+                const p = String(input).trim();
+                if (!p) {
+                    if (typeof GM_setValue === 'function') GM_setValue('aiExportPhone', '');
+                    uploader.phone = '';
+                    refreshUserLabel('');
+                    showToast('已清除用户标识');
+                    return;
+                }
+                if (!/^1[3-9]\d{9}$/.test(p)) {
+                    showToast('手机号格式不正确，应为 1 开头的 11 位数字');
+                    return;
+                }
+                if (typeof GM_setValue === 'function') GM_setValue('aiExportPhone', p);
+                uploader.phone = p;
+                refreshUserLabel(p);
+                showToast(`已设置用户标识：${p}`);
+            };
+
             // 一键拉取"最近"列表全部会话并合并导出（除纳米AI/旧版通义外的六平台支持）
             const batchHostname = location.hostname;
             const batchPlatform = batchHostname.includes('doubao') ? 'doubao'
@@ -3639,7 +3763,7 @@
             }
 
             // 添加按钮的 classname
-            [loadAllButton, jsonButton, mdButton, wordButton, uploadButton].forEach(btn => {
+            [loadAllButton, jsonButton, mdButton, wordButton, uploadButton, userLabel].forEach(btn => {
                 btn.className = 'export-button';
             });
             if (allConvButton) allConvButton.className = 'export-button';
@@ -3649,6 +3773,8 @@
             Object.assign(mdButton.style, buttonStyles);
             Object.assign(wordButton.style, buttonStyles);
             Object.assign(uploadButton.style, buttonStyles);
+            Object.assign(userLabel.style, buttonStyles, { fontSize: '12px', padding: '6px 10px' });
+            refreshUserLabel(''); // 初始渲染(此时样式已应用，不会被 buttonStyles 覆盖)，异步取到手机号后再刷新
 
             // 鼠标悬停效果
             buttonContainer.onmouseenter = () =>{
@@ -3687,7 +3813,7 @@
             });
 
             // 阻止按钮的 mousedown 冒泡影响拖动
-            [loadAllButton, jsonButton, mdButton, wordButton, uploadButton].forEach(btn => {
+            [loadAllButton, jsonButton, mdButton, wordButton, uploadButton, userLabel].forEach(btn => {
                 btn.addEventListener('mousedown', (e) => e.stopPropagation());
             });
             if (allConvButton) {
@@ -3720,6 +3846,7 @@
             buttonContainer.appendChild(mdButton);
             buttonContainer.appendChild(wordButton);
             buttonContainer.appendChild(uploadButton);
+            buttonContainer.appendChild(userLabel);
             document.body.appendChild(buttonContainer);
 
             // 自动折叠/展开功能

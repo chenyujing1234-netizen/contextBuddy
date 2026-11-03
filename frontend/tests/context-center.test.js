@@ -26,7 +26,7 @@ const sourcesPayload = () => ({
   status: 'ok',
   sources: [
     { source_id: 'wechat', name: '微信数据', enabled: true, state: 'up_to_date', last_saved_at: '2026-10-14T10:00:00', summary: { accounts: 1, account: 'wxid_a', successful_databases: 12 }, planned: false, data_dir: '', data_dir_effective: 'C:\\Users\\dev\\AppData\\Roaming\\ContextBuddy\\output\\databases', archive_content: 'structured' },
-    { source_id: 'browser_history', name: '浏览器记录', enabled: true, state: 'idle', last_saved_at: null, planned: false, summary: { platforms: [], total_conversations: 0, total_messages: 0, last_uploaded_at: null, extension: { installed: false, installations: [] } } },
+    { source_id: 'browser_history', name: '浏览器AI问答记录', enabled: true, state: 'idle', last_saved_at: null, planned: false, summary: { platforms: [], total_conversations: 0, total_messages: 0, last_uploaded_at: null, extension: { installed: false, installations: [] } } },
     { source_id: 'computer_activity', name: '电脑操作记录', enabled: false, state: 'planned', last_saved_at: null, summary: { description: '记录本机操作行为' }, planned: true },
     { source_id: 'mobile_upload', name: '手机上传', enabled: false, state: 'planned', last_saved_at: null, summary: { description: '配合手机端 NextCloud 应用' }, planned: true },
     { source_id: 'custom_capture', name: '定制浏览器抓取', enabled: false, state: 'planned', last_saved_at: null, summary: { description: '自动生成定制浏览器插件' }, planned: true }
@@ -72,12 +72,12 @@ describe('上下文中心首页', () => {
     expect(plannedBadges).toHaveLength(3)
   })
 
-  it('点击「浏览器记录」后主界面切换为浏览器记录信息', async () => {
+  it('点击「浏览器AI问答记录」后主界面切换为浏览器AI问答记录信息', async () => {
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
-    // 微信卡片区域被替换为浏览器记录卡片
-    expect(w.text()).toContain('浏览器记录')
+    // 微信卡片区域被替换为浏览器AI问答记录卡片
+    expect(w.text()).toContain('浏览器AI问答记录')
     expect(w.text()).toContain('扩展未安装')
     expect(w.text()).toContain('检查是否已安装')
     expect(w.text()).toContain('安装插件')
@@ -90,7 +90,7 @@ describe('上下文中心首页', () => {
 
   it('安装插件生成副本并展示安装步骤说明', async () => {
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
@@ -103,7 +103,7 @@ describe('上下文中心首页', () => {
   it('浏览器未能自动打开时展示手动打开扩展管理页的引导', async () => {
     api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok', ok: false, error: '未找到 Chrome/Edge 浏览器' })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
@@ -115,7 +115,7 @@ describe('上下文中心首页', () => {
   it('Chrome 已在运行时不重复启动并给出提示', async () => {
     api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok', ok: true, already_running: true })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
@@ -127,7 +127,7 @@ describe('上下文中心首页', () => {
   it('选择 Firefox 时按 Firefox 引导安装并打开调试页', async () => {
     api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok', ok: false, error: '未找到 Firefox 浏览器' })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.find('select').setValue('firefox')
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
@@ -142,7 +142,7 @@ describe('上下文中心首页', () => {
   it('复制路径后安装步骤说明仍保持显示', async () => {
     vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockResolvedValue() } })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '安装插件').trigger('click')
     await flushPromises()
@@ -157,7 +157,7 @@ describe('上下文中心首页', () => {
 
   it('点击平台卡片打开对应 GPT 平台网站', async () => {
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     const card = w.findAll('.cursor-pointer').find(el => el.text().includes('DeepSeek'))
     await card.trigger('click')
@@ -165,7 +165,7 @@ describe('上下文中心首页', () => {
     expect(api.openGptPlatform).toHaveBeenCalledWith('https://chat.deepseek.com/')
   })
 
-  it('切换到浏览器记录后加载并展示已同步会话列表', async () => {
+  it('切换到浏览器AI问答记录后加载并展示已同步会话列表', async () => {
     api.getBrowserConversations.mockReset().mockResolvedValue({
       total: 2,
       conversations: [
@@ -174,7 +174,7 @@ describe('上下文中心首页', () => {
       ]
     })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     expect(api.getBrowserConversations).toHaveBeenCalled()
     expect(w.text()).toContain('已同步会话')
@@ -198,7 +198,7 @@ describe('上下文中心首页', () => {
       ]
     })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     const row = w.findAll('div.cursor-pointer').find(el => el.text().includes('展开会话'))
     await row.trigger('click')
@@ -219,7 +219,7 @@ describe('上下文中心首页', () => {
     })
     api.downloadBrowserExport.mockReset().mockResolvedValue('Kimi-下载会话-9.md')
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '下载 .md').trigger('click')
     await flushPromises()
@@ -238,7 +238,7 @@ describe('上下文中心首页', () => {
     })
     api.getBrowserConversations.mockReset().mockResolvedValue({ total: 0, conversations: [] })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     const kimiBtn = w.findAll('button').find(b => b.text() === 'Kimi')
     expect(kimiBtn).toBeDefined()
@@ -247,7 +247,7 @@ describe('上下文中心首页', () => {
     expect(api.getBrowserConversations).toHaveBeenLastCalledWith(expect.objectContaining({ platform: 'kimi' }))
   })
 
-  it('切换到浏览器记录后加载服务端拉取配置并展示区域', async () => {
+  it('切换到浏览器AI问答记录后加载服务端拉取配置并展示区域', async () => {
     api.getBrowserRemoteConfig.mockReset().mockResolvedValue({
       server_url: 'http://192.168.1.5:8321',
       token: 'srv-token',
@@ -255,7 +255,7 @@ describe('上下文中心首页', () => {
       local_device_id: 'dev-my-laptop'
     })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     expect(api.getBrowserRemoteConfig).toHaveBeenCalled()
     expect(w.text()).toContain('从服务端拉取')
@@ -266,7 +266,7 @@ describe('上下文中心首页', () => {
   it('点击从服务端拉取调用接口并刷新会话列表', async () => {
     api.pullBrowserRemoteConversations.mockReset().mockResolvedValue({ server_total: 5, imported: 3, skipped: 2, failed: 0 })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '从服务端拉取').trigger('click')
     await flushPromises()
@@ -284,7 +284,7 @@ describe('上下文中心首页', () => {
       ]
     })
     const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器记录').trigger('click')
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
     await w.findAll('button').find(b => b.text() === '查看服务端设备').trigger('click')
     await flushPromises()

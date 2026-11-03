@@ -23,7 +23,7 @@
         {{ error }}
       </div>
 
-      <!-- 数据源切换：微信数据 / 浏览器记录 -->
+      <!-- 数据源切换：微信数据 / 浏览器AI问答记录 -->
       <div class="mt-8 flex items-center gap-2">
         <button
           type="button"
@@ -39,7 +39,7 @@
           :class="activeCard === 'browser' ? 'bg-[#07c160] text-white' : 'bg-white text-[#5f5f5f] border border-[#e8e8e8] hover:border-[#07c160] hover:text-[#07c160]'"
           @click="switchCard('browser')"
         >
-          浏览器记录
+          浏览器AI问答记录
         </button>
       </div>
 
@@ -149,12 +149,12 @@
         <p v-if="syncMessage" class="mt-3 text-[12px] leading-5" :class="syncMessageOk ? 'text-[#07964c]' : 'text-red-500'">{{ syncMessage }}</p>
       </section>
 
-      <!-- 浏览器记录卡片：GPT 平台对话数据（配合「AI对话导出」浏览器扩展） -->
+      <!-- 浏览器AI问答记录卡片：GPT 平台对话数据（配合「AI对话导出」浏览器扩展） -->
       <section v-else class="mt-4 rounded-[14px] border border-[#e8e8e8] bg-white p-6 shadow-[0_10px_40px_-24px_rgba(0,0,0,0.35)]">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <h2 class="text-[16px] font-semibold text-[#000000e6]">浏览器记录</h2>
+              <h2 class="text-[16px] font-semibold text-[#000000e6]">浏览器AI问答记录</h2>
               <span
                 class="rounded-full px-2 py-0.5 text-[11px] font-medium"
                 :class="extensionInstalled ? 'bg-[#eefbf4] text-[#07964c]' : 'bg-[#fff7e6] text-[#b7791f]'"
@@ -166,7 +166,7 @@
               配合「AI对话导出」浏览器扩展，在 DeepSeek、豆包、Kimi、腾讯元宝、纳米AI、通义千问、讯飞星火等平台自动抓取对话，一键同步到本机。
             </p>
           </div>
-          <label class="flex shrink-0 cursor-pointer items-center gap-2 text-[12px] text-[#5f5f5f]" title="浏览器记录总开关">
+          <label class="flex shrink-0 cursor-pointer items-center gap-2 text-[12px] text-[#5f5f5f]" title="浏览器AI问答记录总开关">
             <span>启用</span>
             <input
               type="checkbox"
@@ -450,9 +450,20 @@
 
     <LoginDialog :open="loginOpen" @success="onLoginSuccess" @close="onLoginClose" />
 
+    <!-- 启动时登录态检查中：显示加载中，避免已登录用户闪现登录框 -->
+    <div
+      v-if="loginChecking"
+      class="fixed inset-0 z-[199] flex items-center justify-center bg-white/80"
+    >
+      <div class="flex items-center gap-2 text-[14px] text-[#8a8a8a]">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-[#07c160] border-t-transparent"></span>
+        加载中…
+      </div>
+    </div>
+
     <!-- 未登录且登录框被关闭时的门控层：挡住所有按钮，点击任意位置重新弹出登录框 -->
     <div
-      v-if="!loggedIn && !loginOpen"
+      v-if="!loggedIn && !loginOpen && !loginChecking"
       class="fixed inset-0 z-[199] flex items-center justify-center bg-[rgba(14,22,18,0.18)]"
       @click="openLogin"
     >
@@ -487,8 +498,9 @@ const exportDialogOpen = ref(false)
 // ---------- 手机号登录门控：未登录时所有按钮不可用，弹登录框 ----------
 const loggedIn = ref(false)
 const accountPhone = ref('')
-// 默认打开：首屏即用登录框遮罩，避免未登录状态下短暂露出可点击内容
-const loginOpen = ref(true)
+// 启动时先异步确认登录态；期间显示「加载中…」，避免已登录用户闪现登录框
+const loginChecking = ref(true)
+const loginOpen = ref(false)
 
 const checkLogin = async () => {
   try {
@@ -500,6 +512,7 @@ const checkLogin = async () => {
     accountPhone.value = ''
   }
   loginOpen.value = !loggedIn.value
+  loginChecking.value = false
 }
 
 const onLoginSuccess = async (phone) => {
@@ -556,7 +569,7 @@ const switchWechatAccount = (event) => {
   event.target.value = account
 }
 
-// ---------- 浏览器记录（GPT 平台对话抓取扩展） ----------
+// ---------- 浏览器AI问答记录（GPT 平台对话抓取扩展） ----------
 const activeCard = ref('wechat')
 const checkingExtension = ref(false)
 const installingExtension = ref(false)
@@ -864,7 +877,7 @@ const toggleBrowserHistoryEnabled = async (event) => {
     await reload()
   } catch (e) {
     browserHistoryEnabled.value = !enabled
-    error.value = e?.message || '保存浏览器记录开关失败'
+    error.value = e?.message || '保存浏览器AI问答记录开关失败'
   } finally {
     togglingBrowser.value = false
   }

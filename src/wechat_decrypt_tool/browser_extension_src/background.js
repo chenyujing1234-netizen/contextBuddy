@@ -6,6 +6,7 @@
 //                          上传的会话数据归属此标识，服务端下载接口按它隔离数据）
 //   4. ext-download     —— 经 chrome.downloads 把 base64 内容保存到「下载目录/{saveDir}/」
 //      目录仅允许浏览器默认下载文件夹下的相对子目录（可多级，自动创建），不允许绝对路径/..
+//   5. ext-get-phone    —— 读取 ContextBuddy 登录账号（扩展目录 account.json，未登录时文件不存在）
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg) return;
 
@@ -31,6 +32,23 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                 sendResponse({ ok: true, deviceId: id });
             });
         });
+        return true;
+    }
+
+    // 读取 ContextBuddy 登录账号（扩展目录 account.json，未登录时文件不存在）
+    if (msg.type === 'ext-get-phone') {
+        (async function () {
+            var phone = '';
+            try {
+                var res = await fetch(chrome.runtime.getURL('account.json'));
+                if (res.ok) {
+                    var data = await res.json();
+                    var p = String((data && data.phone) || '').trim();
+                    if (/^1[3-9]\d{9}$/.test(p)) phone = p;
+                }
+            } catch (e) { /* 未登录时文件不存在 */ }
+            sendResponse({ ok: !!phone, phone: phone });
+        })();
         return true;
     }
 
