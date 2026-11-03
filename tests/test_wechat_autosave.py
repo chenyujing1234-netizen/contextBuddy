@@ -356,6 +356,35 @@ def test_run_once_generates_structured_by_default(svc, monkeypatch):
     assert manifest["summary"]["structured"]["ok"] is True
 
 
+def test_structured_replaces_existing_dir_with_readonly_file(svc, monkeypatch):
+    """已有 structured_data（含只读文件）时整体替换不报 WinError 183。
+
+    Windows 下 shutil.rmtree(ignore_errors=True) 遇到只读文件会静默失败，
+    旧目录残留导致 rename 报 FileExistsError；修复后应能正常替换。
+    """
+    import os
+    import stat as stat_module
+
+    from wechat_decrypt_tool.app_paths import get_output_databases_dir
+
+    old_dir = get_output_databases_dir() / "wxid_test" / "structured_data"
+    old_file = old_dir / "chat" / "old.json"
+    old_file.parent.mkdir(parents=True, exist_ok=True)
+    old_file.write_text("{}", encoding="utf-8")
+    os.chmod(old_file, stat_module.S_IREAD)
+
+    _patch_save_dependencies(monkeypatch)
+    _patch_structured_generation(monkeypatch)
+
+    result = svc._run_once()
+
+    assert result["status"] == 0
+    assert result["structured"]["ok"] is True
+    assert (old_dir / "index.json").exists()
+    assert not old_file.exists()
+    assert not (old_dir.parent / "structured_data.tmp").exists()
+
+
 def test_run_once_skips_structured_when_databases(svc, monkeypatch):
     """归档内容为“数据库文件”时不生成结构化数据。"""
     context_registry.save_settings({"wechat": {"archive_content": "databases"}})

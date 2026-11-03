@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from .app_paths import get_output_databases_dir
@@ -92,6 +94,49 @@ def _resolve_current_account_context() -> dict[str, Any]:
         "db_storage_path": db_storage_path,
         "wechat_install_path": installation.get("wechat_install_path"),
     }
+
+
+def _force_rmtree(path: Path) -> None:
+    """尽量删除目录：处理 Windows 只读文件；删除失败仅告警不抛出。"""
+
+    def _on_error(func, target, _exc_info):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except Exception:
+            logger.warning(
+                "[wechat-autosave] 清理目录失败（可能被占用）path=%s", target
+            )
+
+    shutil.rmtree(path, onerror=_on_error)
+
+
+def _replace_structured_dir(staging_data: Path, final_dir: Path) -> None:
+    """用暂存目录整体替换 structured_data。
+
+    Windows 下旧目录可能因只读/被占用而删不干净（rmtree ignore_errors 静默失败，
+    随后 rename 报 WinError 183）：这里删除时处理只读属性并重试 rename；
+    若仍失败则回退为 copytree 合并覆盖，保证本轮数据落盘。
+    """
+    _force_rmtree(final_dir)
+    last_error: OSError | None = None
+    for _ in range(3):
+        try:
+            staging_data.rename(final_dir)
+            return
+        except OSError as exc:
+            last_error = exc
+            logger.warning(
+                "[wechat-autosave] 替换 structured_data 失败，重试 error=%s", exc
+            )
+            _force_rmtree(final_dir)
+            time.sleep(0.2)
+    # 目标目录被其他进程长期占用时 rename 无法成功，退化为合并覆盖
+    logger.warning(
+        "[wechat-autosave] rename 重试仍失败，回退为合并覆盖 error=%s",
+        last_error,
+    )
+    shutil.copytree(staging_data, final_dir, dirs_exist_ok=True)
 
 
 class WechatAutosaveService:
@@ -325,9 +370,8 @@ class WechatAutosaveService:
             )
             # 生成器会在暂存目录下创建 structured_data/，整体替换到账号目录
             final_dir = account_dir / "structured_data"
-            if final_dir.exists():
-                shutil.rmtree(final_dir, ignore_errors=True)
-            (staging_root / "structured_data").rename(final_dir)
+            staging_data = staging_root / "structured_data"
+            _replace_structured_dir(staging_data, final_dir)
             shutil.rmtree(staging_root, ignore_errors=True)
             summary: dict[str, Any] = {"ok": True, "files": len(files)}
             try:
