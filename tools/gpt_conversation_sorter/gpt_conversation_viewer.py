@@ -9,6 +9,7 @@ GPT对话记录查看器
 功能
 ----
 - 启动时自动健康检查并加载设备列表
+- 支持按手机号拉取:填写登录手机号只拉该用户的记录,留空则拉取全部用户
 - 支持「全部设备」合并拉取(跨设备去重)或指定设备拉取
 - 「全部设备」拉取时若发现未认领历史数据,会提示先认领再自动拉取全部
 - 右键打分类:左侧会话列表/右侧消息上右键即可标注分类,分类支持手动输入新建
@@ -246,12 +247,20 @@ class ViewerApp:
                                      command=self.export_txt, width=10)
         self.export_btn.grid(row=0, column=7, padx=(8, 0))
 
-        ttk.Label(bar, text="搜索:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(bar, text="手机号:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.phone_var = tk.StringVar(value=str(self.cfg.get("phone") or "").strip())
+        phone_entry = ttk.Entry(bar, textvariable=self.phone_var, width=44)
+        phone_entry.grid(row=1, column=1, padx=(4, 8), pady=(8, 0), sticky="w")
+        ttk.Label(bar, text="按登录手机号拉取该用户的记录;留空拉取全部用户",
+                  foreground="#6b7280", font=FONT_SMALL).grid(
+            row=1, column=2, columnspan=4, sticky="w", pady=(8, 0))
+
+        ttk.Label(bar, text="搜索:").grid(row=2, column=0, sticky="w", pady=(8, 0))
         self.search_var = tk.StringVar()
         search_entry = ttk.Entry(bar, textvariable=self.search_var, width=44)
-        search_entry.grid(row=1, column=1, padx=(4, 8), pady=(8, 0), sticky="w")
+        search_entry.grid(row=2, column=1, padx=(4, 8), pady=(8, 0), sticky="w")
         ttk.Label(bar, text="按标题或消息内容过滤", foreground="#6b7280",
-                  font=FONT_SMALL).grid(row=1, column=2, sticky="w", pady=(8, 0))
+                  font=FONT_SMALL).grid(row=2, column=2, sticky="w", pady=(8, 0))
         self.search_var.trace_add("write", self._on_search_changed)
 
     def _build_statusbar(self):
@@ -439,6 +448,11 @@ class ViewerApp:
         return PLATFORM_CODES.get(name)
 
     def _save_selection(self):
+        phone = self.phone_var.get().strip()
+        if phone:
+            self.cfg["phone"] = phone
+        else:
+            self.cfg.pop("phone", None)
         target = self.device_var.get()
         if target != ALL_DEVICES:
             self.cfg["device"] = self.device_display.get(target)
@@ -446,12 +460,19 @@ class ViewerApp:
         save_config(self.cfg)
 
     def pull_data(self):
+        # 指定了手机号:按手机号拉取该用户的全部记录(跨设备),忽略设备选择
+        phone = self.phone_var.get().strip()
+        if phone:
+            self._pull_by_phone(phone)
+            return
+
         target = self.device_var.get()
         if target == ALL_DEVICES and not self.devices:
             messagebox.showwarning(
                 "提示",
                 "设备列表为空(没有任何已归属数据的设备)。\n"
-                "服务端数据按设备隔离:请先用浏览器插件上传一次数据生成设备后再拉取。")
+                "服务端数据按设备隔离:请先用浏览器插件上传一次数据生成设备后再拉取,\n"
+                "或在「手机号」中填写要拉取的用户手机号。")
             return
         # 「全部设备」模式下,未认领的历史数据(device_id 为空)下载接口拉不到:
         # 先引导认领,再自动拉取全部
@@ -473,13 +494,15 @@ class ViewerApp:
         self._set_busy(True, "正在拉取数据…")
 
         def download_one(device_id):
-            body = {"device_id": device_id, "include_messages": True}
+            params = {"token": TOKEN, "device_id": device_id,
+                      "include_messages": "true"}
             if platform:
-                body["platform"] = platform
-            resp = http_json("POST", "/download", body=body, timeout=120)
+                params["platform"] = platform
+            resp = http_json("GET", "/download", params=params, timeout=120)
             convs = (resp or {}).get("conversations") or []
-            for c in convs:  # 响应的会话内不带device_id,这里补上以便展示
-                c["device_id"] = device_id
+            for c in convs:  # 响应的会话可能不带 device_id,这里补上以便展示
+                if not c.get("device_id"):
+                    c["device_id"] = device_id
             return convs
 
         def task():
@@ -497,6 +520,22 @@ class ViewerApp:
                     raise RuntimeError("所选设备无效,请刷新设备列表")
                 convs.extend(download_one(device_id))
             return convs
+
+        self._run_task("pull", task)
+
+    def _pull_by_phone(self, phone):
+        """按登录手机号拉取该用户的全部记录(跨设备,服务端按 user_phone 过滤)"""
+        platform = self._selected_platform_code()
+        self._save_selection()
+        self._set_busy(True, "正在拉取手机号 {} 的记录…".format(phone))
+        params = {"token": TOKEN, "phone": phone,
+                  "include_messages": "true"}
+        if platform:
+            params["platform"] = platform
+
+        def task():
+            resp = http_json("GET", "/download", params=params, timeout=300)
+            return (resp or {}).get("conversations") or []
 
         self._run_task("pull", task)
 

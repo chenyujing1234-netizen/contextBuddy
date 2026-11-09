@@ -240,79 +240,7 @@
           </div>
         </div>
 
-        <!-- 从服务端拉取：按设备 ID 隔离，只拉取本机浏览器上传的数据 -->
-        <div class="mt-5 rounded-[10px] bg-[#fafafa] px-4 py-3 text-[12px] text-[#5f5f5f]">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="shrink-0 text-[#8a8a8a]">从服务端拉取</span>
-            <span class="min-w-0 flex-1 text-[#8a8a8a]">从「AI对话导出」上传服务拉取数据，按设备 ID 隔离，只拉本机浏览器上传的会话</span>
-          </div>
-          <div class="mt-2 grid gap-2 md:grid-cols-2">
-            <label class="flex items-center gap-2">
-              <span class="w-16 shrink-0 text-[#8a8a8a]">服务端地址</span>
-              <input
-                v-model="remoteConfig.server_url"
-                type="text"
-                placeholder="例如 http://192.168.1.5:8321"
-                class="min-w-0 flex-1 rounded-[6px] border border-[#e4e4e4] bg-white px-2 py-1 outline-none transition focus:border-[#07c160]"
-                :disabled="remoteBusy"
-              />
-            </label>
-            <label class="flex items-center gap-2">
-              <span class="w-16 shrink-0 text-[#8a8a8a]">Token</span>
-              <input
-                v-model="remoteConfig.token"
-                type="text"
-                placeholder="服务端 config.json 中的 token"
-                class="min-w-0 flex-1 rounded-[6px] border border-[#e4e4e4] bg-white px-2 py-1 outline-none transition focus:border-[#07c160]"
-                :disabled="remoteBusy"
-              />
-            </label>
-          </div>
-          <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <span class="shrink-0 text-[#8a8a8a]">本机设备 ID</span>
-            <code class="min-w-0 max-w-full truncate rounded bg-[#f2f2f2] px-2 py-1 text-[11px] text-[#222]">
-              {{ remoteDeviceChoice || remoteDeviceId || '未识别（在本机浏览器用扩展上传一次后自动识别）' }}
-            </code>
-            <button
-              type="button"
-              class="shrink-0 cursor-pointer text-[#07c160] hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="remoteBusy"
-              @click="saveRemoteConfig"
-            >
-              {{ remoteBusy ? '处理中…' : '保存配置' }}
-            </button>
-            <button
-              type="button"
-              class="shrink-0 cursor-pointer text-[#07c160] hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="remoteBusy"
-              @click="loadRemoteDevices"
-            >
-              查看服务端设备
-            </button>
-            <button
-              type="button"
-              class="shrink-0 cursor-pointer font-medium text-[#07c160] hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="remoteBusy"
-              @click="pullRemote"
-            >
-              {{ remoteBusy ? '正在拉取…' : '从服务端拉取' }}
-            </button>
-          </div>
-          <!-- 服务端设备列表：选择本机的设备（每台浏览器一个 ID） -->
-          <div v-if="remoteDevices.length" class="mt-2 space-y-1">
-            <div class="text-[#8a8a8a]">服务端已见设备（点击选中本机的设备）：</div>
-            <label
-              v-for="d in remoteDevices"
-              :key="d.device_id"
-              class="flex cursor-pointer items-center gap-2 rounded-[6px] bg-white px-2 py-1"
-            >
-              <input v-model="remoteDeviceChoice" type="radio" :value="d.device_id" class="accent-[#07c160]" />
-              <span class="min-w-0 flex-1 truncate text-[#222]">{{ d.device_id }}</span>
-              <span class="shrink-0 text-[#8a8a8a]">{{ d.conversations }} 个会话 / {{ d.messages }} 条消息</span>
-            </label>
-          </div>
-          <p v-if="remoteMessage" class="mt-2 leading-5" :class="remoteMessageOk ? 'text-[#07964c]' : 'text-red-500'">{{ remoteMessage }}</p>
-        </div>
+        <p v-if="remoteMessage" class="mt-3 text-[12px] leading-5 text-red-500">{{ remoteMessage }}</p>
 
         <!-- 已同步会话：点击行展开查看消息，可下载为 Markdown（一个会话一个 .md） -->
         <div class="mt-5">
@@ -388,14 +316,26 @@
               </div>
             </div>
           </div>
-          <button
-            v-if="browserConversations.length < convTotal"
-            type="button"
-            class="mt-2 cursor-pointer text-[12px] text-[#07c160] hover:underline"
-            @click="loadMoreConversations"
-          >
-            加载更多（已显示 {{ browserConversations.length }}/{{ convTotal }}）
-          </button>
+          <!-- 分页：每页固定条数，翻页时保持展开状态收起 -->
+          <div v-if="convTotal > 0" class="mt-2 flex flex-wrap items-center justify-center gap-3 text-[12px]">
+            <button
+              type="button"
+              class="cursor-pointer rounded-[6px] border border-[#e4e4e4] px-3 py-1 text-[#222] transition hover:border-[#07c160] disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="convPage <= 1 || convLoading"
+              @click="changeConvPage(convPage - 1)"
+            >
+              上一页
+            </button>
+            <span class="text-[#8a8a8a]">第 {{ convPage }} / {{ convTotalPages }} 页 · 共 {{ convTotal }} 个会话</span>
+            <button
+              type="button"
+              class="cursor-pointer rounded-[6px] border border-[#e4e4e4] px-3 py-1 text-[#222] transition hover:border-[#07c160] disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="convPage >= convTotalPages || convLoading"
+              @click="changeConvPage(convPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
         </div>
 
         <!-- 各 GPT 平台：点击打开平台网站，装好扩展后打开对话即自动抓取 -->
@@ -483,7 +423,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useChatAccountsStore } from '~/stores/chatAccounts'
 
-const { getContextSources, getContextSettings, updateContextSettings, triggerWechatSync, getAuthStatus, logoutAccount, getBrowserHistoryStatus, prepareBrowserExtension, openBrowserExtensionPage, openGptPlatform, getBrowserConversations, getBrowserConversation, downloadBrowserExport, getBrowserRemoteConfig, saveBrowserRemoteConfig, listBrowserRemoteDevices, pullBrowserRemoteConversations } = useApi()
+const { getContextSources, getContextSettings, updateContextSettings, triggerWechatSync, getAuthStatus, logoutAccount, getBrowserHistoryStatus, prepareBrowserExtension, openBrowserExtensionPage, openGptPlatform, getBrowserConversations, getBrowserConversation, downloadBrowserExport, pullBrowserRemoteConversations } = useApi()
 
 const sources = ref([])
 const wechatEnabled = ref(true)
@@ -520,6 +460,8 @@ const onLoginSuccess = async (phone) => {
   accountPhone.value = phone
   loginOpen.value = false
   await reload()
+  // 登录后立即拉取本账号在服务端的会话（仅当前停在浏览器卡片时）
+  if (activeCard.value === 'browser') void autoPullRemote()
 }
 
 const doLogout = async () => {
@@ -607,9 +549,10 @@ const browserPlatforms = computed(() => {
 })
 
 // 已同步会话列表：本机数据库读取，支持平台筛选/分页/展开查看/下载 Markdown
-const CONV_PAGE_SIZE = 50
+const CONV_PAGE_SIZE = 20
 const browserConversations = ref([])
 const convTotal = ref(0)
+const convPage = ref(1)
 const convPlatformFilter = ref('')
 const convLoading = ref(false)
 const convDownloading = ref(false)
@@ -624,18 +567,23 @@ const convFilterOptions = computed(() => {
   return list
 })
 
-const loadConversations = async (reset = false) => {
+const convTotalPages = computed(() => Math.max(1, Math.ceil(convTotal.value / CONV_PAGE_SIZE)))
+
+const loadConversations = async () => {
   convLoading.value = true
   try {
-    const offset = reset ? 0 : browserConversations.value.length
     const resp = await getBrowserConversations({
       platform: convPlatformFilter.value || undefined,
       limit: CONV_PAGE_SIZE,
-      offset
+      offset: (convPage.value - 1) * CONV_PAGE_SIZE
     })
     convTotal.value = resp?.total || 0
-    const items = resp?.conversations || []
-    browserConversations.value = reset ? items : [...browserConversations.value, ...items]
+    browserConversations.value = resp?.conversations || []
+    // 当前页数据被删空且不在第一页时，回退到最后一页
+    if (convTotal.value && !browserConversations.value.length && convPage.value > 1) {
+      convPage.value = convTotalPages.value
+      await loadConversations()
+    }
   } catch (e) {
     error.value = e?.message || '加载已同步会话失败'
   } finally {
@@ -643,14 +591,22 @@ const loadConversations = async (reset = false) => {
   }
 }
 
-const loadMoreConversations = () => loadConversations(false)
+const changeConvPage = (page) => {
+  const next = Math.min(Math.max(1, page), convTotalPages.value)
+  if (next === convPage.value) return
+  convPage.value = next
+  expandedConvId.value = null
+  convDetail.value = null
+  void loadConversations()
+}
 
 const changeConvFilter = (code) => {
   if (convPlatformFilter.value === code) return
   convPlatformFilter.value = code
+  convPage.value = 1
   expandedConvId.value = null
   convDetail.value = null
-  void loadConversations(true)
+  void loadConversations()
 }
 
 const toggleConversation = async (c) => {
@@ -698,84 +654,26 @@ const downloadAllConversations = async () => {
   }
 }
 
-// 从服务端拉取：按 device_id 隔离，只拉本机浏览器上传的会话
-const remoteConfig = ref({ server_url: '', token: '' })
-const remoteDeviceId = ref('')
-const remoteDeviceChoice = ref('')
-const remoteDevices = ref([])
-const remoteBusy = ref(false)
+// 从服务端拉取：地址与 token 已硬编码在后端；仅登录用户可拉，且只拉本人手机号的数据
+const remotePulling = ref(false)
 const remoteMessage = ref('')
-const remoteMessageOk = ref(true)
 
-const loadRemoteConfig = async () => {
-  try {
-    const resp = await getBrowserRemoteConfig()
-    remoteConfig.value = { server_url: resp?.server_url || '', token: resp?.token || '' }
-    remoteDeviceId.value = resp?.local_device_id || ''
-    remoteDeviceChoice.value = resp?.device_id || resp?.local_device_id || ''
-  } catch {
-    // 配置读取失败不打扰用户（本地无配置时静默）
+const autoPullRemote = async () => {
+  if (remotePulling.value) return
+  // 未登录不拉取：后端按登录手机号隔离，未登录会被拒绝
+  if (!loggedIn.value) {
+    remoteMessage.value = '登录后自动从服务端拉取本账号的会话'
+    return
   }
-}
-
-const saveRemoteConfig = async () => {
-  remoteBusy.value = true
+  remotePulling.value = true
+  remoteMessage.value = ''
   try {
-    const resp = await saveBrowserRemoteConfig({
-      server_url: remoteConfig.value.server_url,
-      token: remoteConfig.value.token,
-      device_id: remoteDeviceChoice.value
-    })
-    remoteDeviceId.value = resp?.local_device_id || remoteDeviceId.value
-    remoteMessage.value = '配置已保存'
-    remoteMessageOk.value = true
-  } catch (e) {
-    remoteMessage.value = e?.message || '保存配置失败'
-    remoteMessageOk.value = false
-  } finally {
-    remoteBusy.value = false
-  }
-}
-
-const loadRemoteDevices = async () => {
-  remoteBusy.value = true
-  try {
-    const resp = await listBrowserRemoteDevices({
-      server_url: remoteConfig.value.server_url,
-      token: remoteConfig.value.token
-    })
-    remoteDevices.value = resp?.devices || []
-    if (!remoteDeviceChoice.value && remoteDevices.value.length === 1) {
-      remoteDeviceChoice.value = remoteDevices.value[0].device_id
-    }
-    remoteMessage.value = remoteDevices.value.length
-      ? `服务端共 ${remoteDevices.value.length} 个设备，请选中本机的设备后拉取`
-      : '服务端暂无设备数据（需先用扩展上传一次）'
-    remoteMessageOk.value = !!remoteDevices.value.length
-  } catch (e) {
-    remoteMessage.value = e?.message || '获取服务端设备列表失败'
-    remoteMessageOk.value = false
-  } finally {
-    remoteBusy.value = false
-  }
-}
-
-const pullRemote = async () => {
-  remoteBusy.value = true
-  try {
-    const resp = await pullBrowserRemoteConversations({
-      server_url: remoteConfig.value.server_url,
-      token: remoteConfig.value.token,
-      device_id: remoteDeviceChoice.value || undefined
-    })
-    remoteMessage.value = `拉取完成：服务端 ${resp?.server_total ?? 0} 个会话，导入 ${resp?.imported ?? 0} 个（跳过 ${resp?.skipped ?? 0}，失败 ${resp?.failed ?? 0}）`
-    remoteMessageOk.value = true
-    await loadConversations(true)
+    const resp = await pullBrowserRemoteConversations()
+    if ((resp?.imported ?? 0) > 0) await loadConversations()
   } catch (e) {
     remoteMessage.value = e?.message || '从服务端拉取失败'
-    remoteMessageOk.value = false
   } finally {
-    remoteBusy.value = false
+    remotePulling.value = false
   }
 }
 
@@ -783,8 +681,8 @@ const switchCard = (card) => {
   activeCard.value = card
   if (card === 'browser') {
     void checkExtension(false)
-    void loadConversations(true)
-    void loadRemoteConfig()
+    void loadConversations()
+    void autoPullRemote()
   }
 }
 

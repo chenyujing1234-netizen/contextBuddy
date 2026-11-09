@@ -1431,43 +1431,22 @@ async def export_conversations(ids: str = "", platform: str = ""):
     return await _run(build)
 
 
-# ---------------- 从服务端拉取（按 device_id 设备隔离，仅本机浏览器数据） ----------------
+# ---------------- 从服务端拉取（按登录手机号隔离，仅拉本人账号的数据） ----------------
 
-def _local_device_id() -> str | None:
-    """本机最近一次上传使用的设备 ID（扩展在本机浏览器生成并持久化）。"""
-    db = _get_db()
-    with _DB_LOCK:
-        row = db.execute(
-            "SELECT device_id FROM conversations WHERE device_id IS NOT NULL"
-            " ORDER BY received_at DESC, id DESC LIMIT 1"
-        ).fetchone()
-    return row["device_id"] if row else None
+# 「AI对话导出」上传服务的地址与 token（硬编码，无需用户配置）
+REMOTE_SERVER_URL = "http://114.55.254.123:8321"
+REMOTE_TOKEN = "525186097a4d4879266580c3c3e72cd9384d0eb50a1f52b7"
 
 
-def _remote_settings() -> dict[str, str]:
-    from .context_registry import load_settings
+def _login_phone() -> str:
+    """当前登录账号的手机号（auth_service 的 account.json）。"""
+    from .auth_service import load_account
 
-    remote = (load_settings().get("browser_history") or {}).get("remote") or {}
-    return {
-        "server_url": str(remote.get("server_url") or "").strip(),
-        "token": str(remote.get("token") or "").strip(),
-        "device_id": str(remote.get("device_id") or "").strip(),
-    }
-
-
-def _save_remote_settings(server_url: str, token: str, device_id: str) -> None:
-    from .context_registry import load_settings, save_settings
-
-    settings = load_settings()
-    remote = settings.setdefault("browser_history", {}).setdefault("remote", {})
-    remote["server_url"] = server_url.strip()
-    remote["token"] = token.strip()
-    remote["device_id"] = device_id.strip()
-    save_settings(settings)
+    return str((load_account() or {}).get("phone") or "").strip()
 
 
 def _remote_get(server_url: str, path: str, token: str, params: dict[str, str]) -> dict:
-    """调用远程上传服务的 GET 接口（/download、/devices），返回解析后的 JSON。
+    """调用远程上传服务的 GET 接口（/download），返回解析后的 JSON。
 
     兼容原「AI对话导出」上传服务（Node/MySQL）的查询协议：token 与 device_id 走 query。
     """
@@ -1495,15 +1474,23 @@ def _remote_get(server_url: str, path: str, token: str, params: dict[str, str]) 
     return data
 
 
-def _pull_from_remote(server_url: str, token: str, device_id: str, platform: str = "") -> dict:
-    """从远程服务端拉取指定设备的全部会话并入库（服务端已按 device_id 隔离）。"""
-    params = {"device_id": device_id}
+def _pull_from_remote(server_url: str, token: str, phone: str, platform: str = "") -> dict:
+    """从远程服务端拉取指定手机号的全部会话并入库（服务端按 user_phone 隔离）。
+
+    双重隔离：服务端按 phone 过滤，本地再校验每条会话的 user_phone，
+    确保只入库登录手机号自己的记录。
+    """
+    params = {"phone": phone}
     if platform:
         params["platform"] = platform
     data = _remote_get(server_url, "/download", token, params)
     convs = data.get("conversations") or []
-    imported = skipped = failed = 0
+    imported = skipped = failed = filtered = 0
     for c in convs:
+        # 本地二次校验：非登录手机号的记录一律不拉
+        if str(c.get("user_phone") or "").strip() != phone:
+            filtered += 1
+            continue
         plat = re.sub(r"_(title|chat)$", "", str(c.get("platform") or ""))
         if plat not in PLATFORM_META:
             failed += 1
@@ -1528,7 +1515,7 @@ def _pull_from_remote(server_url: str, token: str, device_id: str, platform: str
             failed += 1
             continue
         try:
-            result = _upsert_conversation(plat, n, device_id=device_id)
+            result = _upsert_conversation(plat, n, device_id=str(c.get("device_id") or "") or None)
         except Exception:  # noqa: BLE001
             logger.exception("[browser_history] 远程会话入库失败 platform=%s conv=%s", plat, n["conversation_id"])
             failed += 1
@@ -1538,71 +1525,26 @@ def _pull_from_remote(server_url: str, token: str, device_id: str, platform: str
         else:
             imported += 1
     return {
-        "device_id": device_id,
+        "phone": phone,
         "server_url": server_url.rstrip("/"),
         "server_total": len(convs),
         "imported": imported,
         "skipped": skipped,
         "failed": failed,
+        "filtered": filtered,
     }
 
 
-@manage_router.get("/remote/config", summary="服务端拉取配置与本机设备 ID")
-async def get_remote_config():
-    def query():
-        cfg = _remote_settings()
-        return {
-            "server_url": cfg["server_url"],
-            "token": cfg["token"],
-            "device_id": cfg["device_id"],
-            "local_device_id": _local_device_id(),
-        }
-
-    return await _run(query)
-
-
-@manage_router.post("/remote/config", summary="保存服务端地址 / token / 设备 ID")
-async def save_remote_config(payload: dict):
-    def persist():
-        _save_remote_settings(
-            str(payload.get("server_url") or ""),
-            str(payload.get("token") or ""),
-            str(payload.get("device_id") or ""),
-        )
-        cfg = _remote_settings()
-        return {**cfg, "local_device_id": _local_device_id()}
-
-    return {"status": "ok", **await _run(persist)}
-
-
-@manage_router.post("/remote/devices", summary="列出服务端已见设备（远程 /devices，便于确认本机设备 ID）")
-async def list_remote_devices(payload: dict):
-    def call():
-        cfg = _remote_settings()
-        server_url = str(payload.get("server_url") or cfg["server_url"]).strip()
-        token = str(payload.get("token") or cfg["token"]).strip()
-        data = _remote_get(server_url, "/devices", token, {})
-        return {"devices": data.get("devices") or []}
-
-    return {"status": "ok", **await _run(call)}
-
-
-@manage_router.post("/remote/pull", summary="从服务端拉取本机设备的会话（设备隔离，仅本机浏览器上传的数据）")
+@manage_router.post("/remote/pull", summary="从服务端拉取登录手机号的会话（按登录账号隔离，仅本人的数据）")
 async def pull_remote_conversations(payload: dict):
     payload = payload or {}
 
     def job():
-        cfg = _remote_settings()
-        server_url = str(payload.get("server_url") or cfg["server_url"]).strip()
-        token = str(payload.get("token") or cfg["token"]).strip()
-        device_id = str(payload.get("device_id") or cfg["device_id"] or "").strip()[:64] or _local_device_id() or ""
-        if not server_url:
-            raise HTTPException(400, "请先配置服务端地址")
-        if not token:
-            raise HTTPException(400, "请先配置服务端 token")
-        if not device_id:
-            raise HTTPException(400, "无法确定本机设备 ID：请先在本机浏览器用扩展上传一次，或在配置中指定设备 ID")
-        result = _pull_from_remote(server_url, token, device_id, str(payload.get("platform") or "").strip())
+        # 按登录手机号隔离：未登录不允许拉取，其他手机号的记录不会入库
+        phone = _login_phone()
+        if not phone:
+            raise HTTPException(401, "请先登录，再从服务端拉取数据")
+        result = _pull_from_remote(REMOTE_SERVER_URL, REMOTE_TOKEN, phone, str(payload.get("platform") or "").strip())
         refresh_manifest()
         return result
 

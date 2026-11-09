@@ -1,12 +1,38 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed, reactive, toRefs } from 'vue'
 import ContextHome from '../pages/index.vue'
+
+// stores/chatAccounts 依赖 Nuxt 自动导入（ref/computed/useApiBase 等），
+// 单测环境直接 mock 掉，返回等价的响应式 store
+vi.mock('~/stores/chatAccounts', () => {
+  const state = reactive({
+    accounts: ['dev_account'],
+    accountInfos: [],
+    switchableAccounts: [],
+    selectedAccount: 'dev_account',
+    loading: false,
+    error: '',
+    loaded: true
+  })
+  return {
+    useChatAccountsStore: () => ({
+      ...toRefs(state),
+      accountInfoByName: computed(() => ({})),
+      selectedDataSourceStatus: computed(() => null),
+      ensureLoaded: vi.fn().mockResolvedValue(undefined),
+      setSelectedAccount: (v) => { state.selectedAccount = v || null },
+      applySourceResponse: () => {}
+    })
+  }
+})
 
 const api = {
   getContextSources: vi.fn(),
   getContextSettings: vi.fn(),
   updateContextSettings: vi.fn(),
   triggerWechatSync: vi.fn(),
+  getAuthStatus: vi.fn(),
   getBrowserHistoryStatus: vi.fn(),
   prepareBrowserExtension: vi.fn(),
   openBrowserExtensionPage: vi.fn(),
@@ -14,9 +40,6 @@ const api = {
   getBrowserConversations: vi.fn(),
   getBrowserConversation: vi.fn(),
   downloadBrowserExport: vi.fn(),
-  getBrowserRemoteConfig: vi.fn(),
-  saveBrowserRemoteConfig: vi.fn(),
-  listBrowserRemoteDevices: vi.fn(),
   pullBrowserRemoteConversations: vi.fn()
 }
 let wrapper
@@ -35,12 +58,15 @@ const sourcesPayload = () => ({
 
 beforeEach(() => {
   navigateToMock = vi.fn()
+  // Nuxt 注入的 process.client 在单测环境不存在，账号检测等入口依赖它
+  Object.defineProperty(process, 'client', { value: true, configurable: true })
   vi.stubGlobal('useApi', () => api)
   vi.stubGlobal('navigateTo', navigateToMock)
   api.getContextSources.mockReset().mockImplementation(async () => sourcesPayload())
   api.getContextSettings.mockReset().mockResolvedValue({ status: 'ok', settings: { wechat: { enabled: true }, browser_history: { enabled: true } } })
   api.updateContextSettings.mockReset().mockResolvedValue({ status: 'ok', settings: { wechat: { enabled: false }, browser_history: { enabled: true } } })
   api.triggerWechatSync.mockReset().mockResolvedValue({ status: 0, errmsg: 'ok', state: 'up_to_date', summary: { accounts: 1 } })
+  api.getAuthStatus.mockReset().mockResolvedValue({ status: 'ok', logged_in: false, phone: '' })
   api.getBrowserHistoryStatus.mockReset().mockResolvedValue({ status: 'ok', installed: false, installations: [], extension_name: 'AI对话导出 word/json/md' })
   api.prepareBrowserExtension.mockReset().mockResolvedValue({ status: 'ok', extension_dir: 'C:\\data\\browser_history\\extension', firefox_extension_dir: 'C:\\data\\browser_history\\extension\\firefox', upload_url: 'http://127.0.0.1:10392' })
   api.openBrowserExtensionPage.mockReset().mockResolvedValue({ status: 'ok' })
@@ -48,13 +74,10 @@ beforeEach(() => {
   api.getBrowserConversations.mockReset().mockResolvedValue({ total: 0, conversations: [] })
   api.getBrowserConversation.mockReset().mockResolvedValue({ id: 0, messages: [] })
   api.downloadBrowserExport.mockReset().mockResolvedValue('export.md')
-  api.getBrowserRemoteConfig.mockReset().mockResolvedValue({ server_url: '', token: '', device_id: '', local_device_id: '' })
-  api.saveBrowserRemoteConfig.mockReset().mockResolvedValue({ server_url: '', token: '', device_id: '', local_device_id: '' })
-  api.listBrowserRemoteDevices.mockReset().mockResolvedValue({ devices: [] })
   api.pullBrowserRemoteConversations.mockReset().mockResolvedValue({ server_total: 0, imported: 0, skipped: 0, failed: 0 })
 })
 
-afterEach(() => { wrapper?.unmount(); vi.unstubAllGlobals() })
+afterEach(() => { wrapper?.unmount(); delete process.client; vi.unstubAllGlobals() })
 
 const mountHome = async () => {
   wrapper = mount(ContextHome, { global: { stubs: { GlobalExportDialog: true, WechatDetectionPanel: true } } })
@@ -184,6 +207,28 @@ describe('上下文中心首页', () => {
     expect(w.text()).toContain('下载 .md')
   })
 
+  it('会话列表超过一页时展示分页并可翻页', async () => {
+    api.getBrowserConversations.mockReset().mockResolvedValue({
+      total: 45,
+      conversations: [
+        { id: 1, platform_code: 'deepseek', platform_name: 'DeepSeek', title: '第一页会话', message_count: 4, char_count: 100, received_at: '2026-10-20T10:00:00' }
+      ]
+    })
+    const w = await mountHome()
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
+    await flushPromises()
+    // 每页 20 条，45 条会话共 3 页
+    expect(w.text()).toContain('第 1 / 3 页')
+    expect(w.text()).toContain('共 45 个会话')
+    // 第一页时「上一页」禁用
+    const prev = w.findAll('button').find(b => b.text() === '上一页')
+    expect(prev.attributes('disabled')).toBeDefined()
+    // 翻到第二页：offset = 20
+    await w.findAll('button').find(b => b.text() === '下一页').trigger('click')
+    await flushPromises()
+    expect(api.getBrowserConversations).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 20, offset: 20 }))
+  })
+
   it('点击会话行展开显示消息明细，再点收起', async () => {
     api.getBrowserConversations.mockReset().mockResolvedValue({
       total: 1,
@@ -247,51 +292,32 @@ describe('上下文中心首页', () => {
     expect(api.getBrowserConversations).toHaveBeenLastCalledWith(expect.objectContaining({ platform: 'kimi' }))
   })
 
-  it('切换到浏览器AI问答记录后加载服务端拉取配置并展示区域', async () => {
-    api.getBrowserRemoteConfig.mockReset().mockResolvedValue({
-      server_url: 'http://192.168.1.5:8321',
-      token: 'srv-token',
-      device_id: '',
-      local_device_id: 'dev-my-laptop'
-    })
-    const w = await mountHome()
-    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
-    await flushPromises()
-    expect(api.getBrowserRemoteConfig).toHaveBeenCalled()
-    expect(w.text()).toContain('从服务端拉取')
-    expect(w.text()).toContain('dev-my-laptop')
-    expect(w.find('input[placeholder="例如 http://192.168.1.5:8321"]').element.value).toBe('http://192.168.1.5:8321')
-  })
-
-  it('点击从服务端拉取调用接口并刷新会话列表', async () => {
+  it('登录后切换到浏览器AI问答记录自动从服务端拉取并刷新会话列表', async () => {
+    api.getAuthStatus.mockReset().mockResolvedValue({ status: 'ok', logged_in: true, phone: '13800001111' })
     api.pullBrowserRemoteConversations.mockReset().mockResolvedValue({ server_total: 5, imported: 3, skipped: 2, failed: 0 })
     const w = await mountHome()
     await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
-    await w.findAll('button').find(b => b.text() === '从服务端拉取').trigger('click')
-    await flushPromises()
     expect(api.pullBrowserRemoteConversations).toHaveBeenCalled()
-    expect(w.text()).toContain('拉取完成：服务端 5 个会话，导入 3 个（跳过 2，失败 0）')
-    // 拉取后刷新本地会话列表
+    // 拉取到新数据后刷新本地会话列表
     expect(api.getBrowserConversations.mock.calls.filter(c => (c[0] || {}).offset === 0).length).toBeGreaterThanOrEqual(2)
   })
 
-  it('查看服务端设备展示设备列表并可选中', async () => {
-    api.listBrowserRemoteDevices.mockReset().mockResolvedValue({
-      devices: [
-        { device_id: 'dev-a', conversations: 3, messages: 10, last_active: '2026-01-01' },
-        { device_id: 'dev-b', conversations: 1, messages: 4, last_active: '2026-01-02' }
-      ]
-    })
+  it('未登录时不触发服务端拉取并提示先登录', async () => {
     const w = await mountHome()
     await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
-    await w.findAll('button').find(b => b.text() === '查看服务端设备').trigger('click')
+    expect(api.pullBrowserRemoteConversations).not.toHaveBeenCalled()
+    expect(w.text()).toContain('登录后自动从服务端拉取本账号的会话')
+  })
+
+  it('自动拉取失败时在界面上提示错误', async () => {
+    api.getAuthStatus.mockReset().mockResolvedValue({ status: 'ok', logged_in: true, phone: '13800001111' })
+    api.pullBrowserRemoteConversations.mockReset().mockRejectedValue(new Error('无法连接服务端'))
+    const w = await mountHome()
+    await w.findAll('button').find(b => b.text() === '浏览器AI问答记录').trigger('click')
     await flushPromises()
-    expect(api.listBrowserRemoteDevices).toHaveBeenCalled()
-    expect(w.text()).toContain('dev-a')
-    expect(w.text()).toContain('dev-b')
-    expect(w.text()).toContain('3 个会话 / 10 条消息')
+    expect(w.text()).toContain('无法连接服务端')
   })
 
   it('切换自动保存开关调用设置接口', async () => {
@@ -312,7 +338,8 @@ describe('上下文中心首页', () => {
 
   it('归档内容默认结构化的数据，切换调用设置接口', async () => {
     const w = await mountHome()
-    const select = w.find('select')
+    // 页面上可能有多个下拉框（如账号选择），按选项定位归档内容下拉框
+    const select = w.findAll('select').find(s => s.findAll('option').some(o => o.element.value === 'databases'))
     expect(select.element.value).toBe('structured')
     expect(w.text()).toContain('归档内容')
     expect(w.text()).toContain('JSON 与 TXT')
@@ -382,26 +409,19 @@ describe('上下文中心首页', () => {
     expect(w.text()).not.toContain('密钥')
   })
 
-  it('账号检测以浮层打开，主界面保留且不发生导航', async () => {
+  it('账号检测在独立子窗口打开，主界面保留且不发生导航', async () => {
     const w = await mountHome()
-    await w.findAll('a').find(a => a.text() === '账号检测').trigger('click')
-    await flushPromises()
-    expect(navigateToMock).not.toHaveBeenCalled()
-    // 主界面（微信卡片）仍在 DOM 中
-    expect(w.text()).toContain('微信数据')
-    // 浮层容器与检测面板出现
-    expect(w.find('.wechat-detection-overlay-card').exists()).toBe(true)
-    expect(w.findComponent({ name: 'WechatDetectionPanel' }).exists()).toBe(true)
-  })
-
-  it('点击浮层背景关闭账号检测浮层', async () => {
-    const w = await mountHome()
-    await w.findAll('a').find(a => a.text() === '账号检测').trigger('click')
-    await flushPromises()
-    await w.find('.wechat-detection-overlay-backdrop').trigger('click')
-    await flushPromises()
-    expect(w.find('.wechat-detection-overlay-card').exists()).toBe(false)
-    expect(w.findComponent({ name: 'WechatDetectionPanel' }).exists()).toBe(false)
+    const openMock = vi.spyOn(window, 'open').mockReturnValue(null)
+    try {
+      await w.findAll('a').find(a => a.text() === '账号检测').trigger('click')
+      await flushPromises()
+      expect(openMock).toHaveBeenCalledWith('/detection', '_blank')
+      expect(navigateToMock).not.toHaveBeenCalled()
+      // 主界面（微信卡片）仍在 DOM 中
+      expect(w.text()).toContain('微信数据')
+    } finally {
+      openMock.mockRestore()
+    }
   })
 
   it('查看微信上下文打开独立子窗口，主界面保留且不发生导航', async () => {

@@ -1,4 +1,5 @@
 """浏览器记录：扩展上传协议、归一化入库、去重检查与统计。"""
+import json
 import os
 from pathlib import Path
 
@@ -482,38 +483,32 @@ def test_upload_stores_device_id(client):
     with bh._DB_LOCK:
         row = db.execute("SELECT device_id FROM conversations").fetchone()
     assert row["device_id"] == "dev-local-1"
-    assert bh._local_device_id() == "dev-local-1"
 
 
-def test_remote_config_save_and_load(client):
-    resp = client.get("/api/context/browser-history/remote/config")
-    assert resp.status_code == 200
-    assert resp.json()["server_url"] == ""
+_LOGIN_PHONE = "13800001111"
 
-    resp = client.post(
-        "/api/context/browser-history/remote/config",
-        json={"server_url": "http://192.168.1.5:8321/", "token": "srv-token", "device_id": "dev-9"},
+
+def _login(tmp_phone=_LOGIN_PHONE):
+    """模拟已登录：写入 account.json（与 auth_service.set_login 同构）。"""
+    from wechat_decrypt_tool.auth_service import get_account_path
+
+    get_account_path().write_text(
+        json.dumps({"phone": tmp_phone, "logged_in_at": "2026-01-01T00:00:00"}),
+        encoding="utf-8",
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["server_url"] == "http://192.168.1.5:8321/"
-    assert body["device_id"] == "dev-9"
-
-    resp = client.get("/api/context/browser-history/remote/config")
-    body = resp.json()
-    assert body["token"] == "srv-token"
-    assert body["device_id"] == "dev-9"
 
 
 _REMOTE_DOWNLOAD = {
     "ok": True,
-    "device_id": "dev-remote",
-    "total": 2,
+    "phone": _LOGIN_PHONE,
+    "total": 3,
     "conversations": [
         {
             "platform": "deepseek",
             "conversation_id": "r-1",
             "title": "远程会话1",
+            "user_phone": _LOGIN_PHONE,
+            "device_id": "dev-remote",
             "platform_created_at": None,
             "platform_updated_at": "2026-01-02 10:00:00",
             "messages": [
@@ -525,28 +520,62 @@ _REMOTE_DOWNLOAD = {
             "platform": "kimi",
             "conversation_id": "r-2",
             "title": "远程会话2",
+            "user_phone": _LOGIN_PHONE,
+            "device_id": "dev-remote",
             "platform_created_at": None,
             "platform_updated_at": None,
             "messages": [
                 {"message_id": "k1", "role": "user", "content": "Kimi远程问题", "thinking_content": None, "msg_time": None},
             ],
         },
+        # 其他手机号的记录：服务端漏返时本地也不得入库
+        {
+            "platform": "kimi",
+            "conversation_id": "r-other",
+            "title": "别人手机号的会话",
+            "user_phone": "13900002222",
+            "device_id": "dev-other",
+            "platform_created_at": None,
+            "platform_updated_at": None,
+            "messages": [
+                {"message_id": "o1", "role": "user", "content": "别人的数据", "thinking_content": None, "msg_time": None},
+            ],
+        },
     ],
 }
 
 
-def test_remote_pull_imports_and_dedupes(client, monkeypatch):
-    monkeypatch.setattr(bh, "_remote_get", lambda *a, **kw: _REMOTE_DOWNLOAD)
+def test_remote_pull_requires_login(client, monkeypatch):
+    """未登录时拒绝拉取。"""
+    resp = client.post("/api/context/browser-history/remote/pull", json={})
+    assert resp.status_code == 401
+    assert "登录" in resp.json()["detail"]
 
-    resp = client.post(
-        "/api/context/browser-history/remote/pull",
-        json={"server_url": "http://192.168.1.5:8321", "token": "srv-token", "device_id": "dev-remote"},
-    )
+
+def test_remote_pull_imports_and_dedupes(client, monkeypatch):
+    _login()
+    seen = {}
+
+    def fake_remote_get(server_url, path, token, params):
+        seen["server_url"] = server_url
+        seen["token"] = token
+        seen["params"] = params
+        return _REMOTE_DOWNLOAD
+
+    monkeypatch.setattr(bh, "_remote_get", fake_remote_get)
+
+    resp = client.post("/api/context/browser-history/remote/pull", json={})
     assert resp.status_code == 200, resp.text
+    # 服务端地址与 token 直接使用硬编码值，并按登录手机号请求
+    assert seen["server_url"] == bh.REMOTE_SERVER_URL
+    assert seen["token"] == bh.REMOTE_TOKEN
+    assert seen["params"]["phone"] == _LOGIN_PHONE
     body = resp.json()
-    assert body["server_total"] == 2
+    assert body["server_total"] == 3
     assert body["imported"] == 2
     assert body["failed"] == 0
+    # 其他手机号的会话被本地二次过滤
+    assert body["filtered"] == 1
 
     # 会话进入本地列表，可查看、可导出（与既有展示/下载链路一致）
     resp = client.get("/api/context/browser-history/conversations")
@@ -555,65 +584,34 @@ def test_remote_pull_imports_and_dedupes(client, monkeypatch):
     resp = client.get(f"/api/context/browser-history/conversations/{conv_id}")
     assert resp.status_code == 200 and resp.json()["messages"]
 
-    # 拉取的数据标记 device_id，并被识别为本机设备
+    # 拉取的数据保留服务端的 device_id；别人的会话未入库
     db = bh._get_db()
     with bh._DB_LOCK:
-        rows = db.execute("SELECT DISTINCT device_id FROM conversations").fetchall()
+        rows = db.execute("SELECT conversation_id, device_id FROM conversations").fetchall()
     assert {r["device_id"] for r in rows} == {"dev-remote"}
-    assert bh._local_device_id() == "dev-remote"
+    assert {r["conversation_id"] for r in rows} == {"r-1", "r-2"}
 
     # 同一数据再次拉取：内容一致 → 全部跳过
-    resp = client.post(
-        "/api/context/browser-history/remote/pull",
-        json={"server_url": "http://192.168.1.5:8321", "token": "srv-token", "device_id": "dev-remote"},
-    )
+    resp = client.post("/api/context/browser-history/remote/pull", json={})
     body = resp.json()
     assert body["imported"] == 0
     assert body["skipped"] == 2
 
 
-def test_remote_pull_uses_local_device_id_when_absent(client, monkeypatch):
-    """未显式指定 device_id 时自动使用本机最近上传的设备。"""
-    _post_upload(client, "deepseek", _deepseek_single(), device_id="dev-auto")
-
-    seen = {}
-
-    def fake_remote_get(server_url, path, token, params):
-        seen["params"] = params
-        return {"ok": True, "conversations": []}
-
-    monkeypatch.setattr(bh, "_remote_get", fake_remote_get)
-    resp = client.post(
-        "/api/context/browser-history/remote/pull",
-        json={"server_url": "http://srv", "token": "t"},
-    )
+def test_remote_pull_only_own_phone_records(client, monkeypatch):
+    """本地二次校验：服务端即使返回其他手机号的记录也不入库。"""
+    _login()
+    monkeypatch.setattr(
+        bh, "_remote_get",
+        lambda *a, **kw: {"ok": True, "conversations": [_REMOTE_DOWNLOAD["conversations"][2]]})
+    resp = client.post("/api/context/browser-history/remote/pull", json={})
     assert resp.status_code == 200, resp.text
-    assert seen["params"]["device_id"] == "dev-auto"
-
-
-def test_remote_pull_requires_device_id(client, monkeypatch):
-    resp = client.post(
-        "/api/context/browser-history/remote/pull",
-        json={"server_url": "http://srv", "token": "t"},
-    )
-    assert resp.status_code == 400
-    assert "设备 ID" in resp.json()["detail"]
-
-
-def test_remote_devices_endpoint(client, monkeypatch):
-    def fake_remote_get(server_url, path, token, params):
-        assert path == "/devices"
-        return {"ok": True, "devices": [
-            {"device_id": "dev-a", "conversations": 3, "messages": 10, "last_active": "2026-01-01"},
-        ]}
-
-    monkeypatch.setattr(bh, "_remote_get", fake_remote_get)
-    resp = client.post(
-        "/api/context/browser-history/remote/devices",
-        json={"server_url": "http://srv", "token": "t"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["devices"][0]["device_id"] == "dev-a"
+    body = resp.json()
+    assert body["imported"] == 0
+    assert body["filtered"] == 1
+    db = bh._get_db()
+    with bh._DB_LOCK:
+        assert db.execute("SELECT COUNT(*) AS n FROM conversations").fetchone()["n"] == 0
 
 
 def test_remote_get_validates_url_and_token():
